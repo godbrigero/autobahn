@@ -52,6 +52,22 @@ impl Server {
     };
   }
 
+  fn connection_ensure_loop(peers_map: Arc<Mutex<HashMap<Address, Peer>>>) {
+    tokio::spawn(async move {
+      loop {
+        let mut peers = peers_map.lock().await;
+        let connect_futures = peers.values_mut().map(|peer| peer.ensure_connection());
+        let results = futures_util::future::join_all(connect_futures).await;
+        if !results.iter().all(|&success| success) {
+          error!("Failed to connect to some peers, retrying in 1 seconds...");
+        }
+
+        drop(peers);
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+      }
+    });
+  }
+
   pub async fn start(&mut self) {
     self.listener = Some(
       TcpListener::bind(format!("0.0.0.0:{}", self.address.port))
@@ -61,6 +77,8 @@ impl Server {
 
     info!("Server started on {}", self.address.build_ws_url());
     debug!("Server UUID: {}", self.uuid);
+
+    Server::connection_ensure_loop(self.peers_map.clone());
 
     while let Ok((stream, addr)) = self.listener.as_mut().unwrap().accept().await {
       debug!("New client connection from {}", addr);
@@ -159,9 +177,7 @@ impl Server {
       uuid,
     );
 
-    drop(topics_map);
-
-    Server::optimally_send_peers_server_msg(
+    Server::send_peers_server_msg(
       server_state_message,
       peers.lock().await.values_mut().collect(),
     )
@@ -190,11 +206,25 @@ impl Server {
         .await
       }
       MessageType::Publish => Server::handle_publish(bytes, topics_map, peers).await,
-      MessageType::Subscribe => Server::handle_subscribe(bytes, ws_write, topics_map, peers).await,
+      MessageType::Subscribe => {
+        Server::handle_subscribe(bytes, ws_write, topics_map, peers, uuid).await
+      }
       MessageType::Unsubscribe => {
         Server::handle_unsubscribe(bytes, ws_write, topics_map, peers, uuid).await
       }
+      MessageType::ServerStats => {
+        Server::handle_server_stats(bytes, ws_write, topics_map, peers, uuid).await
+      }
     }
+  }
+
+  async fn handle_server_stats(
+    bytes: Bytes,
+    ws_write: WebSocketWrite,
+    topics_map: Arc<Mutex<TopicsMap>>,
+    peers: Arc<Mutex<HashMap<Address, Peer>>>,
+    uuid: String,
+  ) {
   }
 
   async fn handle_unsubscribe(
@@ -227,6 +257,7 @@ impl Server {
     ws_write: WebSocketWrite,
     topics_map: Arc<Mutex<TopicsMap>>,
     peers: Arc<Mutex<HashMap<Address, Peer>>>,
+    uuid: String,
   ) {
     let subscribe_message = match TopicMessage::decode(bytes.clone()) {
       Ok(msg) => {
@@ -238,13 +269,17 @@ impl Server {
         return;
       }
     };
-    topics_map
-      .lock()
-      .await
-      .push(subscribe_message.topic, ws_write);
-
+    let mut topics_map = topics_map.lock().await;
+    topics_map.push(subscribe_message.topic, ws_write);
+    let server_state_message =
+      build_server_state_message(topics_map.get().keys().cloned().collect(), uuid);
     drop(topics_map);
-    Server::optimally_send_peers_server_msg(bytes, peers.lock().await.values_mut().collect()).await;
+
+    Server::optimally_send_peers(
+      server_state_message,
+      peers.lock().await.values_mut().collect(),
+    )
+    .await;
   }
 
   async fn handle_publish(
@@ -281,7 +316,7 @@ impl Server {
 
     tokio::join!(send_to_subscribers);
 
-    Server::optimally_send_peers_server_msg(
+    Server::send_peers_server_msg(
       bytes.clone(),
       peers
         .lock()
@@ -308,19 +343,31 @@ impl Server {
         let publish_message = PublishMessage::decode(bytes.clone())
           .expect("Error decoding publish message in server_forward");
 
-        if let Some(clients) = topics_map.lock().await.get().get(&publish_message.topic) {
-          let futures = clients.iter().map(|client| {
-            let bytes = bytes.clone();
-            async move {
-              let _ = client
-                .lock()
-                .await
-                .send(tungstenite::Message::Binary(bytes))
-                .await;
-            }
-          });
-          futures_util::future::join_all(futures).await;
-        }
+        let subscribers = topics_map
+          .lock()
+          .await
+          .get()
+          .get(&publish_message.topic)
+          .cloned()
+          .unwrap_or_else(Vec::new);
+
+        debug!(
+          "Handling publish message from server forward {}",
+          subscribers.len()
+        );
+
+        let futures = subscribers.iter().map(|client| {
+          let bytes = bytes.clone();
+          async move {
+            let _ = client
+              .lock()
+              .await
+              .send(tungstenite::Message::Binary(bytes))
+              .await;
+          }
+        });
+
+        futures_util::future::join_all(futures).await;
       }
       _ => {}
     }
@@ -347,7 +394,7 @@ impl Server {
     peer_gotten_from.update_topics(server_state_message.topics);
   }
 
-  async fn optimally_send_peers_server_msg(data: Bytes, peers: Vec<&mut Peer>) {
+  async fn send_peers_server_msg(data: Bytes, peers: Vec<&mut Peer>) {
     let server_message_raw = build_proto_message(&ServerForwardMessage {
       message_type: MessageType::ServerForward as i32,
       payload: data.to_vec(),

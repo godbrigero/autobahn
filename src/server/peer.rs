@@ -83,14 +83,18 @@ impl Peer {
       .await
     {
       Ok(_) => debug!("Successfully sent message to peer"),
-      Err(e) => error!("Failed to send message to peer: {}", e),
+
+      Err(e) => {
+        self.websocket = None;
+        error!("Failed to send message to peer: {}", e);
+      }
     }
   }
 
-  async fn ensure_connection(&mut self) {
+  pub async fn ensure_connection(&mut self) -> bool {
     if self.websocket.is_some() {
       debug!("Connection already established");
-      return;
+      return true;
     }
 
     info!(
@@ -106,10 +110,13 @@ impl Peer {
         error!("Failed to connect to WebSocket: {}", e);
         None
       }
-    }
-    .expect("Req Result Error ensure_connection");
+    };
 
-    let (sink, mut stream) = req_result;
+    if req_result.is_none() {
+      return false;
+    }
+
+    let (sink, mut stream) = req_result.unwrap();
     self.websocket = Some(sink);
 
     debug!("Waiting for initial server state message");
@@ -139,5 +146,7 @@ impl Peer {
     });
     self.server_id = Some(server_state.1);
     debug!("Peer initialization complete");
+
+    return true;
   }
 }

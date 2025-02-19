@@ -8,6 +8,7 @@ enum MessageType {
   PUBLISH = 2;
   SUBSCRIBE = 3;
   UNSUBSCRIBE = 4;
+  SERVER_STATS = 5;
 }
 
 message AbstractMessage {
@@ -39,4 +40,11 @@ message PublishMessage {
 message UnsubscribeMessage {
   MessageType message_type = 1;
   string topic = 2;
+}
+
+message ServerStatsMessage {
+  MessageType message_type = 1;
+  string uuid = 2;
+  int32 timestamp_in = 3;
+  int32 timestamp_out = 4;
 }
