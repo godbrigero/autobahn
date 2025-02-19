@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package message;
+
+enum MessageType {
+  SERVER_STATE = 0;
+  SERVER_FORWARD = 1;
+  PUBLISH = 2;
+  SUBSCRIBE = 3;
+  UNSUBSCRIBE = 4;
+}
+
+message AbstractMessage {
+  MessageType message_type = 1;
+}
+
+message ServerStateMessage {
+  MessageType message_type = 1;
+  string uuid = 2;
+  repeated string topics = 3;
+}
+
+message ServerForwardMessage {
+  MessageType message_type = 1;
+  bytes payload = 2;
+}
+
+message TopicMessage {
+  MessageType message_type = 1;
+  string topic = 2;
+}
+
+message PublishMessage {
+  MessageType message_type = 1;
+  string topic = 2;
+  bytes payload = 3;
+}
+
+message UnsubscribeMessage {
+  MessageType message_type = 1;
+  string topic = 2;
+}
