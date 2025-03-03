@@ -22,6 +22,10 @@ tonic = "0.12.3"
 uuid = { version = "1.8", features = ["v4", "fast-rng"] }
 getset = "0.1.4"
 
+[[bin]]
+name = "autobahn"
+path = "src/main.rs"
+
 [build-dependencies]
 prost-build = "0.13.5"
 tonic-build = "0.12.3"

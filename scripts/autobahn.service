@@ -1,0 +1,13 @@
+[Unit]
+Description=Autobahn Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/autobahn --config /etc/autobahn/config.toml
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
