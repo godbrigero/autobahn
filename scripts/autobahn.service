@@ -6,6 +6,9 @@ After=network.target
 Type=simple
 ExecStart=/usr/local/bin/autobahn --config /etc/autobahn/config.toml
 Restart=always
+RestartSec=2
+StartLimitBurst=5
+StartLimitIntervalSec=60
 User=root
 Group=root
 
