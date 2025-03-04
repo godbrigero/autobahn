@@ -18,7 +18,7 @@ After=network.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/ubuntu/Documents/autobahn
-ExecStart=/home/ubuntu/Documents/autobahn/scripts/startup.bash
+ExecStart=/home/ubuntu/Documents/autobahn/scripts/startup.sh
 RemainAfterExit=yes
 
 [Install]
@@ -26,7 +26,7 @@ WantedBy=multi-user.target
 EOF
 
 # Make startup script executable
-chmod +x scripts/startup.bash
+chmod +x scripts/startup.sh
 
 # Enable and start the update service
 sudo systemctl daemon-reload
