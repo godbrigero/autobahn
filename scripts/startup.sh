@@ -1,12 +1,20 @@
 #!/bin/bash
 
-cd /home/ubuntu/autobahn
+cd /home/ubuntu/Documents/autobahn
 
-git pull
+# Update Rust toolchain if needed
+rustup update
 
+# Clean and rebuild
+cargo clean
 cargo build --release
 
-sudo cp target/release/autobahn /usr/local/bin/
-
-sudo systemctl daemon-reload
-sudo systemctl restart autobahn
+# Only proceed if build was successful
+if [ -f target/release/autobahn ]; then
+    sudo cp target/release/autobahn /usr/local/bin/
+    sudo systemctl daemon-reload
+    sudo systemctl restart autobahn
+else
+    echo "Build failed - autobahn binary not created"
+    exit 1
+fi
