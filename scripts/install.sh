@@ -15,14 +15,14 @@ After=network.target
 [Service]
 Type=oneshot
 WorkingDirectory=/home/ubuntu/autobahn
-ExecStart=/home/ubuntu/autobahn/scripts/startup.bash
+ExecStart=/home/ubuntu/autobahn/scripts/startup.sh
 RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-chmod +x scripts/startup.bash
+chmod +x scripts/startup.sh
 
 sudo systemctl daemon-reload
 sudo systemctl enable autobahn-update
