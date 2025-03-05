@@ -7,7 +7,7 @@ rustup update
 
 # Clean and rebuild
 cargo clean
-cargo build --release
+cargo build --release -Znext-lockfile-bump
 
 # Only proceed if build was successful
 if [ -f target/release/autobahn ]; then

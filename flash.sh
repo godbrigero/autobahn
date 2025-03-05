@@ -6,5 +6,5 @@ apt install -y git
 git clone https://github.com/PinewoodRobotics/autobahn.git
 cd autobahn
 
-sudo bash ./scripts/install.sh
+bash ./scripts/install.sh
 
