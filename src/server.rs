@@ -219,12 +219,13 @@ impl Server {
   }
 
   async fn handle_server_stats(
-    bytes: Bytes,
-    ws_write: WebSocketWrite,
-    topics_map: Arc<Mutex<TopicsMap>>,
-    peers: Arc<Mutex<HashMap<Address, Peer>>>,
-    uuid: String,
+    _bytes: Bytes,
+    _ws_write: WebSocketWrite,
+    _topics_map: Arc<Mutex<TopicsMap>>,
+    _peers: Arc<Mutex<HashMap<Address, Peer>>>,
+    _uuid: String,
   ) {
+    // This method is intentionally left empty as it's not implemented yet
   }
 
   async fn handle_unsubscribe(
@@ -413,4 +414,35 @@ impl Server {
 
     futures_util::future::join_all(futures).await;
   }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn test_server_creation() {
+    let self_addr = Address::from_str("127.0.0.1:8080").unwrap();
+    let peer_addrs = vec![Address::from_str("127.0.0.1:8081").unwrap()];
+
+    let server = Server::new(peer_addrs.clone(), self_addr.clone());
+
+    assert_eq!(server.address, self_addr);
+    assert_eq!(server.peers_map.lock().await.len(), 1);
+    assert!(server.topics_map.lock().await.get().is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_peer_connection() {
+    let self_addr = Address::from_str("127.0.0.1:8080").unwrap();
+    let peer_addrs = vec![Address::from_str("127.0.0.1:8081").unwrap()];
+
+    let peer_addr = peer_addrs[0].clone();
+    let server = Server::new(peer_addrs.clone(), self_addr.clone());
+    let mut peer_map = server.peers_map.lock().await;
+    let peer = peer_map.get_mut(&peer_addr).unwrap();
+    assert!(!peer.is_connected());
+  }
+
+  // Add more test functions for other server functionality
 }
