@@ -2,7 +2,6 @@ use autobahn::server::Server;
 use autobahn::util::Address;
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::net::TcpListener;
 use tokio_tungstenite::connect_async;
 
 #[tokio::test]

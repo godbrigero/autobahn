@@ -54,7 +54,7 @@ impl TopicsMap {
 mod tests {
   use super::*;
   use futures::StreamExt;
-  use std::net::SocketAddr;
+  
   use tokio::net::TcpListener;
 
   async fn create_mock_websocket() -> WebSocketWrite {

@@ -219,12 +219,13 @@ impl Server {
   }
 
   async fn handle_server_stats(
-    bytes: Bytes,
-    ws_write: WebSocketWrite,
-    topics_map: Arc<Mutex<TopicsMap>>,
-    peers: Arc<Mutex<HashMap<Address, Peer>>>,
-    uuid: String,
+    _bytes: Bytes,
+    _ws_write: WebSocketWrite,
+    _topics_map: Arc<Mutex<TopicsMap>>,
+    _peers: Arc<Mutex<HashMap<Address, Peer>>>,
+    _uuid: String,
   ) {
+    // This method is intentionally left empty as it's not implemented yet
   }
 
   async fn handle_unsubscribe(
@@ -418,7 +419,6 @@ impl Server {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::str::FromStr;
 
   #[tokio::test]
   async fn test_server_creation() {
