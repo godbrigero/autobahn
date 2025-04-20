@@ -46,6 +46,10 @@ impl Peer {
     };
   }
 
+  pub fn is_connected(&self) -> bool {
+    self.websocket.is_some()
+  }
+
   pub fn update_topics(&mut self, new_topics: Vec<String>) {
     debug!("Updating topics for peer. Old topics: {:?}", self.topics);
     self.topics.clear();
