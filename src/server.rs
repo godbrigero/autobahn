@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info};
+use no_incode_comments::external_doc;
 use peer::Peer;
 use prost::Message;
 use tokio::{
@@ -27,6 +28,7 @@ use crate::{
 mod peer;
 mod topics_map;
 
+#[external_doc(path = "src/docs/server.md", key = "Server")]
 pub struct Server {
   listener: Option<TcpListener>,
   address: Address,

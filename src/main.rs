@@ -1,3 +1,5 @@
+use no_incode_comments::external_doc;
+
 use std::env;
 
 use config::Config;
