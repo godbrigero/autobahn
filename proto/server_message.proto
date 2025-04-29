@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package server_message;
+
+enum ServerMessageType {
+  INIT = 0;
+  PING = 1;
+  MESSAGE = 2;
+}
+
+message ServerAbstractMessage {
+  ServerMessageType message_type = 1;
+}
+
+message ServerInitMessage {
+  ServerMessageType message_type = 1;
+  string uuid = 2;
+}

@@ -30,7 +30,7 @@ mod topics_map;
 
 #[external_doc(path = "src/docs/server.md", key = "Server")]
 pub struct Server {
-  listener: Option<TcpListener>,
+  listener: Mutex<Option<TcpListener>>,
   address: Address,
   topics_map: Arc<Mutex<TopicsMap>>,
   peers_map: Arc<Mutex<HashMap<Address, Peer>>>,
@@ -46,7 +46,7 @@ impl Server {
       .collect::<HashMap<Address, Peer>>();
 
     return Self {
-      listener: None,
+      listener: Mutex::new(None),
       address: self_addr,
       topics_map: Arc::new(Mutex::new(TopicsMap::new())),
       peers_map: Arc::new(Mutex::new(peers)),
@@ -54,10 +54,10 @@ impl Server {
     };
   }
 
-  fn connection_ensure_loop(peers_map: Arc<Mutex<HashMap<Address, Peer>>>) {
+  fn connection_ensure_loop(self: Arc<Self>) {
     tokio::spawn(async move {
       loop {
-        let mut peers = peers_map.lock().await;
+        let mut peers = self.peers_map.lock().await;
         let connect_futures = peers.values_mut().map(|peer| peer.ensure_connection());
         let results = futures_util::future::join_all(connect_futures).await;
         if !results.iter().all(|&success| success) {
@@ -70,8 +70,9 @@ impl Server {
     });
   }
 
-  pub async fn start(&mut self) {
-    self.listener = Some(
+  pub async fn start(self: Arc<Self>) {
+    let mut listener = self.listener.lock().await;
+    *listener = Some(
       TcpListener::bind(format!("0.0.0.0:{}", self.address.port))
         .await
         .expect("Failed to bind server"),
@@ -80,17 +81,15 @@ impl Server {
     info!("Server started on {}", self.address.build_ws_url());
     debug!("Server UUID: {}", self.uuid);
 
-    Server::connection_ensure_loop(self.peers_map.clone());
+    self.clone().connection_ensure_loop();
 
-    while let Ok((stream, addr)) = self.listener.as_mut().unwrap().accept().await {
+    while let Ok((stream, addr)) = listener.as_mut().unwrap().accept().await {
       debug!("New client connection from {}", addr);
-      let topics_map = self.topics_map.clone();
-      let peers = self.peers_map.clone();
-      let uuid = self.uuid.clone();
+      let self_clone = self.clone();
       tokio::spawn(async move {
         match accept_async(stream).await {
           Ok(ws_stream) => {
-            Server::handle_client(uuid, ws_stream, topics_map, peers).await;
+            self_clone.handle_client(ws_stream).await;
           }
           Err(e) => {
             println!("Error in accept_async: {}", e)
@@ -100,18 +99,13 @@ impl Server {
     }
   }
 
-  async fn handle_client(
-    self_uuid: String,
-    ws_stream: WebSocketStream<TcpStream>,
-    topics: Arc<Mutex<TopicsMap>>,
-    peers: Arc<Mutex<HashMap<Address, Peer>>>,
-  ) {
+  async fn handle_client(self: Arc<Self>, ws_stream: WebSocketStream<TcpStream>) {
     debug!("Handling new client connection");
     let (mut write, mut read) = ws_stream.split();
     write
       .send(tungstenite::Message::Binary(build_server_state_message(
-        topics.lock().await.get().keys().cloned().collect(),
-        self_uuid.clone(),
+        self.topics_map.lock().await.get().keys().cloned().collect(),
+        self.uuid.clone(),
       )))
       .await
       .expect("Error handle_client, write.send()");
@@ -120,7 +114,10 @@ impl Server {
     while let Some(msg) = read.next().await {
       let message = match msg {
         Ok(tungstenite::Message::Close(_)) => {
-          debug!("Client sent close message");
+          self
+            .clone()
+            .handle_client_disconnected(ws_write.clone())
+            .await;
           None
         }
         Ok(tungstenite::Message::Ping(_)) => {
@@ -130,13 +127,10 @@ impl Server {
         Ok(msg) => Some(msg),
         Err(e) => {
           error!("Client disconnected with error: {}", e);
-          Server::handle_client_disconnected(
-            self_uuid.clone(),
-            ws_write.clone(),
-            topics.clone(),
-            peers.clone(),
-          )
-          .await;
+          self
+            .clone()
+            .handle_client_disconnected(ws_write.clone())
+            .await;
           None
         }
       };
@@ -150,15 +144,15 @@ impl Server {
             "Handling message type: {:?}",
             MessageType::try_from(abstract_message.message_type)
           );
-          Server::handle_message(
-            MessageType::try_from(abstract_message.message_type).expect("handle_message, try_from"),
-            bytes,
-            ws_write.clone(),
-            topics.clone(),
-            peers.clone(),
-            self_uuid.clone(),
-          )
-          .await;
+          self
+            .clone()
+            .handle_message(
+              MessageType::try_from(abstract_message.message_type)
+                .expect("handle_message, try_from"),
+              bytes,
+              ws_write.clone(),
+            )
+            .await;
         } else {
           error!("Failed to deserialize message");
         }
@@ -166,77 +160,57 @@ impl Server {
     }
   }
 
-  async fn handle_client_disconnected(
-    uuid: String,
-    ws_write: WebSocketWrite,
-    topics_map: Arc<Mutex<TopicsMap>>,
-    peers: Arc<Mutex<HashMap<Address, Peer>>>,
-  ) {
+  async fn handle_client_disconnected(self: Arc<Self>, ws_write: WebSocketWrite) {
     debug!("Handling client disconnection");
-    topics_map.lock().await.remove_subscriber(&ws_write);
+    let mut topics_map = self.topics_map.lock().await;
+    topics_map.remove_subscriber(&ws_write);
     let server_state_message = build_server_state_message(
-      topics_map.lock().await.get().keys().cloned().collect(),
-      uuid,
+      topics_map.get().keys().cloned().collect(),
+      self.uuid.clone(),
     );
 
-    Server::send_peers_server_msg(
+    send_peers_server_msg(
       server_state_message,
-      peers.lock().await.values_mut().collect(),
+      self.peers_map.lock().await.values_mut().collect(),
     )
     .await;
   }
 
   async fn handle_message(
+    self: Arc<Self>,
     message_type: MessageType,
     bytes: Bytes,
     ws_write: WebSocketWrite,
-    topics_map: Arc<Mutex<TopicsMap>>,
-    peers: Arc<Mutex<HashMap<Address, Peer>>>,
-    uuid: String,
   ) {
     debug!("Processing message of type: {:?}", message_type);
     match message_type {
-      MessageType::ServerState => Server::handle_server_state(
+      MessageType::ServerState => handle_server_state(
         ServerStateMessage::decode(bytes).expect("Failed decoding MessageType::ServerState"),
-        peers.lock().await.values_mut().collect(),
+        self.peers_map.lock().await.values_mut().collect(),
       ),
       MessageType::ServerForward => {
-        Server::handle_server_forward(
-          ServerForwardMessage::decode(bytes).expect("Failed to decode MessageType::ServerForward"),
-          topics_map,
-        )
-        .await
+        self
+          .clone()
+          .handle_server_forward(
+            ServerForwardMessage::decode(bytes)
+              .expect("Failed to decode MessageType::ServerForward"),
+          )
+          .await
       }
-      MessageType::Publish => Server::handle_publish(bytes, topics_map, peers).await,
+      MessageType::Publish => {
+        self.clone().handle_publish(bytes).await;
+      }
       MessageType::Subscribe => {
-        Server::handle_subscribe(bytes, ws_write, topics_map, peers, uuid).await
+        self.clone().handle_subscribe(bytes, ws_write).await;
       }
       MessageType::Unsubscribe => {
-        Server::handle_unsubscribe(bytes, ws_write, topics_map, peers, uuid).await
+        self.clone().handle_unsubscribe(bytes, ws_write).await;
       }
-      MessageType::ServerStats => {
-        Server::handle_server_stats(bytes, ws_write, topics_map, peers, uuid).await
-      }
+      MessageType::ServerStats => {}
     }
   }
 
-  async fn handle_server_stats(
-    _bytes: Bytes,
-    _ws_write: WebSocketWrite,
-    _topics_map: Arc<Mutex<TopicsMap>>,
-    _peers: Arc<Mutex<HashMap<Address, Peer>>>,
-    _uuid: String,
-  ) {
-    // This method is intentionally left empty as it's not implemented yet
-  }
-
-  async fn handle_unsubscribe(
-    bytes: Bytes,
-    ws_write: WebSocketWrite,
-    topics_map: Arc<Mutex<TopicsMap>>,
-    peers: Arc<Mutex<HashMap<Address, Peer>>>,
-    uuid: String,
-  ) {
+  async fn handle_unsubscribe(self: Arc<Self>, bytes: Bytes, ws_write: WebSocketWrite) {
     let unsubscribe_message = match UnsubscribeMessage::decode(bytes.clone()) {
       Ok(msg) => {
         debug!("Client unsubscribing from topic: {}", msg.topic);
@@ -247,21 +221,18 @@ impl Server {
         return;
       }
     };
-    let mut topics_map = topics_map.lock().await;
+    let mut topics_map = self.topics_map.lock().await;
     topics_map.remove_subscriber_from_topic(&unsubscribe_message.topic, &ws_write);
-    let message = build_server_state_message(topics_map.get().keys().cloned().collect(), uuid);
+    let message = build_server_state_message(
+      topics_map.get().keys().cloned().collect(),
+      self.uuid.clone(),
+    );
     drop(topics_map);
 
-    Server::optimally_send_peers(message, peers.lock().await.values_mut().collect()).await;
+    optimally_send_peers(message, self.peers_map.lock().await.values_mut().collect()).await;
   }
 
-  async fn handle_subscribe(
-    bytes: Bytes,
-    ws_write: WebSocketWrite,
-    topics_map: Arc<Mutex<TopicsMap>>,
-    peers: Arc<Mutex<HashMap<Address, Peer>>>,
-    uuid: String,
-  ) {
+  async fn handle_subscribe(self: Arc<Self>, bytes: Bytes, ws_write: WebSocketWrite) {
     let subscribe_message = match TopicMessage::decode(bytes.clone()) {
       Ok(msg) => {
         debug!("Client subscribing to topic: {}", msg.topic);
@@ -272,24 +243,22 @@ impl Server {
         return;
       }
     };
-    let mut topics_map = topics_map.lock().await;
+    let mut topics_map = self.topics_map.lock().await;
     topics_map.push(subscribe_message.topic, ws_write);
-    let server_state_message =
-      build_server_state_message(topics_map.get().keys().cloned().collect(), uuid);
+    let server_state_message = build_server_state_message(
+      topics_map.get().keys().cloned().collect(),
+      self.uuid.clone(),
+    );
     drop(topics_map);
 
-    Server::optimally_send_peers(
+    optimally_send_peers(
       server_state_message,
-      peers.lock().await.values_mut().collect(),
+      self.peers_map.lock().await.values_mut().collect(),
     )
     .await;
   }
 
-  async fn handle_publish(
-    bytes: Bytes,
-    topics_map: Arc<Mutex<TopicsMap>>,
-    peers: Arc<Mutex<HashMap<Address, Peer>>>,
-  ) {
+  async fn handle_publish(self: Arc<Self>, bytes: Bytes) {
     let topic_message = match deserialize_partial::<TopicMessage>(&bytes) {
       Ok(msg) => {
         debug!("Publishing message to topic: {}", msg.topic);
@@ -302,7 +271,7 @@ impl Server {
     };
 
     let send_to_subscribers = async {
-      if let Some(subscriber_list) = topics_map.lock().await.get().get(&topic_message.topic) {
+      if let Some(subscriber_list) = self.topics_map.lock().await.get().get(&topic_message.topic) {
         let futures = subscriber_list.iter().map(|subscriber| {
           let bytes = bytes.clone();
           async move {
@@ -319,9 +288,10 @@ impl Server {
 
     tokio::join!(send_to_subscribers);
 
-    Server::send_peers_server_msg(
+    send_peers_server_msg(
       bytes.clone(),
-      peers
+      self
+        .peers_map
         .lock()
         .await
         .values_mut()
@@ -332,10 +302,7 @@ impl Server {
     .await;
   }
 
-  async fn handle_server_forward(
-    server_forward_message: ServerForwardMessage,
-    topics_map: Arc<Mutex<TopicsMap>>,
-  ) {
+  async fn handle_server_forward(self: Arc<Self>, server_forward_message: ServerForwardMessage) {
     debug!("Handling server forward message");
     let bytes = Bytes::from(server_forward_message.payload);
     let abstract_message =
@@ -346,7 +313,8 @@ impl Server {
         let publish_message = PublishMessage::decode(bytes.clone())
           .expect("Error decoding publish message in server_forward");
 
-        let subscribers = topics_map
+        let subscribers = self
+          .topics_map
           .lock()
           .await
           .get()
@@ -375,47 +343,48 @@ impl Server {
       _ => {}
     }
   }
+}
 
-  fn handle_server_state(server_state_message: ServerStateMessage, mut peers: Vec<&mut Peer>) {
-    debug!(
-      "Handling server state message from UUID: {}",
-      server_state_message.uuid
-    );
-    let peer_gotten_from = peers
-      .iter_mut()
-      .find(|peer| {
-        if let Some(peer_server_id) = peer.server_id() {
-          peer_server_id == &server_state_message.uuid
-        } else {
-          false
-        }
-      })
-      .expect(
-        "Peer from which server message was sent from is not a valid peer: handle_server_state",
-      );
+fn handle_server_state(server_state_message: ServerStateMessage, mut peers: Vec<&mut Peer>) {
+  debug!(
+    "Handling server state message from UUID: {}",
+    server_state_message.uuid
+  );
 
-    peer_gotten_from.update_topics(server_state_message.topics);
-  }
-
-  async fn send_peers_server_msg(data: Bytes, peers: Vec<&mut Peer>) {
-    let server_message_raw = build_proto_message(&ServerForwardMessage {
-      message_type: MessageType::ServerForward as i32,
-      payload: data.to_vec(),
-    });
-
-    Server::optimally_send_peers(server_message_raw, peers).await;
-  }
-
-  async fn optimally_send_peers(data: Bytes, peers: Vec<&mut Peer>) {
-    let futures = peers.into_iter().map(|peer| {
-      let message = data.clone();
-      async move {
-        peer.send_raw(message).await;
+  let peer_gotten_from = peers
+    .iter_mut()
+    .find(|peer| {
+      if let Some(peer_server_id) = peer.server_id() {
+        peer_server_id == &server_state_message.uuid
+      } else {
+        false
       }
-    });
+    })
+    .expect(
+      "Peer from which server message was sent from is not a valid peer: handle_server_state",
+    );
 
-    futures_util::future::join_all(futures).await;
-  }
+  peer_gotten_from.update_topics(server_state_message.topics);
+}
+
+async fn send_peers_server_msg(data: Bytes, peers: Vec<&mut Peer>) {
+  let server_message_raw = build_proto_message(&ServerForwardMessage {
+    message_type: MessageType::ServerForward as i32,
+    payload: data.to_vec(),
+  });
+
+  optimally_send_peers(server_message_raw, peers).await;
+}
+
+async fn optimally_send_peers(data: Bytes, peers: Vec<&mut Peer>) {
+  let futures = peers.into_iter().map(|peer| {
+    let message = data.clone();
+    async move {
+      peer.send_raw(message).await;
+    }
+  });
+
+  futures_util::future::join_all(futures).await;
 }
 
 #[cfg(test)]

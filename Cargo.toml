@@ -22,6 +22,8 @@ tonic = "0.12.3"
 uuid = { version = "1.8", features = ["v4", "fast-rng"] }
 getset = "0.1.4"
 no-incode-comments = "0.1.0"
+metrics = "0.24.2"
+metrics-exporter-prometheus = "0.17.0"
 
 [[bin]]
 name = "autobahn"

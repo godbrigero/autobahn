@@ -1,13 +1,14 @@
 use autobahn::server::Server;
 use autobahn::util::Address;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_tungstenite::connect_async;
 
 #[tokio::test]
 async fn test_server_startup() {
   let self_addr = Address::from_str("127.0.0.1:8080").unwrap();
-  let mut server = Server::new(Vec::new(), self_addr.clone());
+  let mut server = Arc::new(Server::new(Vec::new(), self_addr.clone()));
 
   // Start server in a separate task
   let server_handle = tokio::spawn(async move {
@@ -30,8 +31,14 @@ async fn test_peer_communication() {
   let server1_addr = Address::from_str("127.0.0.1:8081").unwrap();
   let server2_addr = Address::from_str("127.0.0.1:8082").unwrap();
 
-  let mut server1 = Server::new(vec![server2_addr.clone()], server1_addr.clone());
-  let mut server2 = Server::new(vec![server1_addr.clone()], server2_addr.clone());
+  let mut server1 = Arc::new(Server::new(
+    vec![server2_addr.clone()],
+    server1_addr.clone(),
+  ));
+  let mut server2 = Arc::new(Server::new(
+    vec![server1_addr.clone()],
+    server2_addr.clone(),
+  ));
 
   let server1_handle = tokio::spawn(async move {
     server1.start().await;
