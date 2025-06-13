@@ -6,9 +6,16 @@ use getset::Getters;
 use log::{debug, error, info};
 use prost::Message;
 use tokio::net::TcpStream;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+  connect_async, connect_async_with_config, MaybeTlsStream, WebSocketStream,
+};
+use tungstenite::protocol::WebSocketConfig;
 
-use crate::{message::ServerStateMessage, util::Address};
+use crate::{
+  message::ServerStateMessage,
+  server::{MAX_FRAME_SIZE, MAX_MESSAGE_SIZE},
+  util::Address,
+};
 
 #[derive(Getters)]
 pub struct Peer {
@@ -105,16 +112,21 @@ impl Peer {
       "Establishing new connection to {}",
       self.address.build_ws_url()
     );
-    let req_result = match connect_async(self.address.build_ws_url()).await {
-      Ok((ws_stream, _)) => {
-        debug!("WebSocket connection established successfully");
-        Some(ws_stream.split())
-      }
-      Err(e) => {
-        error!("Failed to connect to WebSocket: {}", e);
-        None
-      }
-    };
+    let mut config = WebSocketConfig::default();
+    config.max_message_size = Some(MAX_MESSAGE_SIZE);
+    config.max_frame_size = Some(MAX_FRAME_SIZE);
+
+    let req_result =
+      match connect_async_with_config(self.address.build_ws_url(), Some(config), false).await {
+        Ok((ws_stream, _)) => {
+          debug!("WebSocket connection established successfully");
+          Some(ws_stream.split())
+        }
+        Err(e) => {
+          error!("Failed to connect to WebSocket: {}", e);
+          None
+        }
+      };
 
     if req_result.is_none() {
       return false;

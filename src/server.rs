@@ -10,7 +10,9 @@ use tokio::{
   net::{TcpListener, TcpStream},
   sync::Mutex,
 };
-use tokio_tungstenite::{accept_async, WebSocketStream};
+use tokio_tungstenite::{
+  accept_async, accept_async_with_config, tungstenite::protocol::WebSocketConfig, WebSocketStream,
+};
 use topics_map::{TopicsMap, WebSocketWrite};
 use uuid::Uuid;
 
@@ -27,6 +29,10 @@ use crate::{
 
 mod peer;
 mod topics_map;
+
+// Define the WebSocket config constants
+const MAX_MESSAGE_SIZE: usize = 50 * 1024 * 1024; // 50MB
+const MAX_FRAME_SIZE: usize = 50 * 1024 * 1024; // 50MB
 
 #[external_doc(path = "src/docs/server.md", key = "Server")]
 pub struct Server {
@@ -87,7 +93,11 @@ impl Server {
       debug!("New client connection from {}", addr);
       let self_clone = self.clone();
       tokio::spawn(async move {
-        match accept_async(stream).await {
+        let mut config = WebSocketConfig::default();
+        config.max_message_size = Some(MAX_MESSAGE_SIZE);
+        config.max_frame_size = Some(MAX_FRAME_SIZE);
+
+        match accept_async_with_config(stream, Some(config)).await {
           Ok(ws_stream) => {
             self_clone.handle_client(ws_stream).await;
           }
