@@ -22,7 +22,9 @@ use crate::{
     TopicMessage, UnsubscribeMessage,
   },
   util::{
-    proto::{build_proto_message, build_server_state_message, deserialize_partial},
+    proto::{
+      build_proto_message, build_server_state_message, deserialize_partial, fast_get_message_type,
+    },
     Address,
   },
 };
@@ -60,6 +62,12 @@ impl Server {
     };
   }
 
+  pub async fn add_peer(self: Arc<Self>, peer_addr: Address) {
+    let mut peers = self.peers_map.lock().await;
+    debug!("Adding peer: {}", peer_addr);
+    peers.insert(peer_addr.clone(), Peer::new(peer_addr));
+  }
+
   fn connection_ensure_loop(self: Arc<Self>) {
     tokio::spawn(async move {
       loop {
@@ -92,19 +100,21 @@ impl Server {
     while let Ok((stream, addr)) = listener.as_mut().unwrap().accept().await {
       debug!("New client connection from {}", addr);
       let self_clone = self.clone();
-      tokio::spawn(async move {
-        let mut config = WebSocketConfig::default();
-        config.max_message_size = Some(MAX_MESSAGE_SIZE);
-        config.max_frame_size = Some(MAX_FRAME_SIZE);
+      std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+          let mut config = WebSocketConfig::default();
+          config.max_message_size = Some(MAX_MESSAGE_SIZE);
+          config.max_frame_size = Some(MAX_FRAME_SIZE);
 
-        match accept_async_with_config(stream, Some(config)).await {
-          Ok(ws_stream) => {
-            self_clone.handle_client(ws_stream).await;
-          }
-          Err(e) => {
-            println!("Error in accept_async: {}", e)
-          }
-        };
+          match accept_async_with_config(stream, Some(config)).await {
+            Ok(ws_stream) => {
+              self_clone.handle_client(ws_stream).await;
+            }
+            Err(e) => {
+              println!("Error in accept_async: {}", e)
+            }
+          };
+        });
       });
     }
   }
@@ -114,7 +124,7 @@ impl Server {
     let (mut write, mut read) = ws_stream.split();
     write
       .send(tungstenite::Message::Binary(build_server_state_message(
-        self.topics_map.lock().await.get().keys().cloned().collect(),
+        self.topics_map.lock().await.get_all_topics(),
         self.uuid.clone(),
       )))
       .await
@@ -148,20 +158,12 @@ impl Server {
       if let Some(message) = message {
         debug!("Processing message of size {} bytes", message.len());
         let bytes = message.into_data();
-        let abstract_message = deserialize_partial::<AbstractMessage>(&bytes);
-        if let Ok(abstract_message) = abstract_message {
-          debug!(
-            "Handling message type: {:?}",
-            MessageType::try_from(abstract_message.message_type)
-          );
+        let msg_type = fast_get_message_type(&bytes);
+        if let Some(msg_type) = msg_type {
+          debug!("Handling message type: {:?}", msg_type);
           self
             .clone()
-            .handle_message(
-              MessageType::try_from(abstract_message.message_type)
-                .expect("handle_message, try_from"),
-              bytes,
-              ws_write.clone(),
-            )
+            .handle_message(msg_type, bytes, ws_write.clone())
             .await;
         } else {
           error!("Failed to deserialize message");

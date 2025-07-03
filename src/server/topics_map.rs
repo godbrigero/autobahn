@@ -22,6 +22,10 @@ impl TopicsMap {
     return &mut self.topic_map;
   }
 
+  pub fn get_all_topics(&self) -> Vec<String> {
+    self.topic_map.keys().cloned().collect()
+  }
+
   pub fn push(&mut self, topic: String, ws: WebSocketWrite) {
     if self.topic_map.get(&topic).is_none() {
       self.topic_map.insert(topic.clone(), Vec::new());
@@ -54,7 +58,7 @@ impl TopicsMap {
 mod tests {
   use super::*;
   use futures::StreamExt;
-  
+
   use tokio::net::TcpListener;
 
   async fn create_mock_websocket() -> WebSocketWrite {

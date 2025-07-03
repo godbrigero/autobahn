@@ -1,7 +1,8 @@
 pub mod config;
+pub mod discovery;
 pub mod server;
 pub mod util;
 
-mod message {
+pub mod message {
   include!(concat!(env!("OUT_DIR"), "/message.rs"));
 }

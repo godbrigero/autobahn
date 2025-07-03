@@ -6,7 +6,7 @@ use crate::util::Address;
 pub struct Config {
   pub debug: bool,
   pub self_addr: Address,
-  pub others: Vec<Address>,
+  pub others: Option<Vec<Address>>,
 }
 
 impl Config {

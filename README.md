@@ -1,5 +1,11 @@
 # Autobahn
 
+Please note that this project is super poop code BUT it works.
+
+## IT WORKS, BUT PLEASE CONTRIBUTE TO THIS PROJECT IF YOU CAN!
+
+---
+
 ## Build
 
 ```bash
