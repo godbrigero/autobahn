@@ -65,6 +65,11 @@ impl Server {
   pub async fn add_peer(self: Arc<Self>, peer_addr: Address) {
     let mut peers = self.peers_map.lock().await;
     debug!("Adding peer: {}", peer_addr);
+    if peers.contains_key(&peer_addr) {
+      debug!("Peer already exists: {}", peer_addr);
+      return;
+    }
+
     peers.insert(peer_addr.clone(), Peer::new(peer_addr));
   }
 

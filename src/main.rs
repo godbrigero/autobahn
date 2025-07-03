@@ -22,7 +22,8 @@ async fn main() {
     config.self_addr,
   ));
   let server_clone = server.clone();
-  discovery.clone().run_discovery_server();
+
+  let discovery_broadcast_handle = discovery.clone().run_discovery_server_continuous();
   let discovery_loop_handle = discovery.clone().start_discovery_loop(move |ip, port| {
     let server_clone = server_clone.clone();
     async move {
@@ -37,6 +38,7 @@ async fn main() {
   let server_handle = server.start();
 
   let result = tokio::select! {
+    _ = discovery_broadcast_handle => "Discovery broadcast loop exited",
     _ = discovery_loop_handle => "Discovery loop exited",
     _ = server_handle => "Server exited",
     _ = ctrl_c() => "Received Ctrl+C"
