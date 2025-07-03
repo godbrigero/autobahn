@@ -1,3 +1,5 @@
+// TODO: Mac -> pi DOES NOT WORK ATM at all. Mac CAN find but the pi doesn't see mac's brodcast at all.
+
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
