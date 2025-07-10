@@ -21,6 +21,8 @@ Please note that while this project's code could use improvement, it is function
 publish relay subscribe
 client -> server -> client
 
+Please note that most of these time constrains are due to the websockets and not the server itself (Ok sure it [server] adds like ~0.5ms at higher loads but still)
+
 - <1ms for messages lower than 1mb
 - ~2ms for messages of 1mb
 - ~>2ms for messages of >1mb
