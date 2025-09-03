@@ -28,10 +28,12 @@ impl Discovery {
       warn!("Failed to get system-dependent IP, falling back to first non-loopback IP");
       get_first_non_loopback_ip().expect("Failed to get any valid IP address")
     });
+
     info!(
       "Initializing Discovery service with IP: {}, port: {}",
       ip, port
     );
+
     Self::new_with_ip(ip, port)
   }
 
@@ -40,6 +42,7 @@ impl Discovery {
       "Creating new Discovery instance with IP: {}, port: {}",
       ip, port
     );
+
     let mdns = ServiceDaemon::new().unwrap();
     let receiver = mdns.browse(SERVICE).unwrap();
 

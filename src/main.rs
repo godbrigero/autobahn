@@ -23,8 +23,8 @@ async fn main() {
   ));
   let server_clone = server.clone();
 
-  let discovery_broadcast_handle = discovery.clone().run_discovery_server_continuous();
-  let discovery_loop_handle = discovery.clone().start_discovery_loop(move |ip, port| {
+  // let discovery_broadcast_handle = discovery.clone().run_discovery_server_continuous();
+  /*let discovery_loop_handle = discovery.clone().start_discovery_loop(move |ip, port| {
     let server_clone = server_clone.clone();
     async move {
       server_clone
@@ -34,12 +34,12 @@ async fn main() {
         })
         .await;
     }
-  });
+  });*/
   let server_handle = server.start();
 
   let result = tokio::select! {
-    _ = discovery_broadcast_handle => "Discovery broadcast loop exited",
-    _ = discovery_loop_handle => "Discovery loop exited",
+    // _ = discovery_broadcast_handle => "Discovery broadcast loop exited",
+    // _ = discovery_loop_handle => "Discovery loop exited",
     _ = server_handle => "Server exited",
     _ = ctrl_c() => "Received Ctrl+C"
   };

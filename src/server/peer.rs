@@ -11,11 +11,7 @@ use tokio_tungstenite::{
 };
 use tungstenite::protocol::WebSocketConfig;
 
-use crate::{
-  message::ServerStateMessage,
-  server::{MAX_FRAME_SIZE, MAX_MESSAGE_SIZE},
-  util::Address,
-};
+use crate::{message::ServerStateMessage, util::ws::get_config, util::Address};
 
 #[derive(Getters)]
 pub struct Peer {
@@ -112,9 +108,7 @@ impl Peer {
       "Establishing new connection to {}",
       self.address.build_ws_url()
     );
-    let mut config = WebSocketConfig::default();
-    config.max_message_size = Some(MAX_MESSAGE_SIZE);
-    config.max_frame_size = Some(MAX_FRAME_SIZE);
+    let mut config = get_config();
 
     let req_result =
       match connect_async_with_config(self.address.build_ws_url(), Some(config), false).await {

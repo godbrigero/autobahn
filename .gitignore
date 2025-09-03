@@ -1,2 +1,7 @@
 target/
 .venv/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz

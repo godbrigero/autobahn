@@ -1,1 +1,4 @@
 zeroconf
+autobahn_client
+asyncio
+matplotlib
