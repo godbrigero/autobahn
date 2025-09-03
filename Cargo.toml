@@ -13,14 +13,11 @@ serde = { version = "1.0.219", features = ["derive"] }
 toml = "0.8.19"
 futures-util = "0.3.31"
 rand = "0.9.1"
-log = "0.4"
-env_logger = "0.11.6"
 bytes = "1.9.0"
 uuid = { version = "1.8", features = ["v4", "fast-rng"] }
-getset = "0.1.6"
-no-incode-comments = "0.1.0"
-mdns-sd = "0.13.10"
-get_if_addrs = "0.5.3"
+anyhow = "1.0.99"
+async-trait = "0.1.77"
+once_cell = "1.21.3"
 
 [[bin]]
 name = "autobahn"
@@ -35,22 +32,3 @@ tokio-test = "0.4.2"
 futures = "0.3.31"
 async-trait = "0.1.77"
 mockall = "0.12.1"
-
-[[test]]
-name = "integration_tests"
-path = "tests/integration_tests.rs"
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-strip = true
-
-[profile.dev]
-opt-level = 1
-
-[profile.profiling]
-inherits = "release"
-debug = true
-strip = false
