@@ -29,7 +29,7 @@ use crate::{
     util::{optimally_send_peers, send_peers_server_msg},
   },
   util::{
-    proto::{build_proto_message, build_server_state_message, get_message_type},
+    proto::{build_proto_message, get_message_type},
     ws::get_config,
     Address,
   },
@@ -121,10 +121,9 @@ impl Server {
     let (mut write, mut read) = ws_stream.split();
     let topics = self.topics_map.get_all_topics().await;
     write
-      .send(tungstenite::Message::Binary(build_server_state_message(
-        topics,
-        self.uuid.clone(),
-      )))
+      .send(tungstenite::Message::Binary(
+        self.topics_map.to_proto(self.uuid.clone()).await,
+      ))
       .await
       .expect("Error handle_client, write.send()");
 
@@ -168,8 +167,7 @@ impl Server {
   async fn handle_client_disconnected(self: Arc<Self>, ws_write: Arc<Websock>) {
     debug!("Handling client disconnection");
     self.topics_map.remove_subscriber(&ws_write).await;
-    let topics = self.topics_map.get_all_topics().await;
-    let server_state_message = build_server_state_message(topics, self.uuid.clone());
+    let server_state_message = self.topics_map.to_proto(self.uuid.clone()).await;
 
     self.peers_map.send_to_all(server_state_message).await;
   }

@@ -2,15 +2,7 @@ use bytes::{Bytes, BytesMut};
 use log::error;
 use prost::Message;
 
-use crate::message::{AbstractMessage, MessageType, ServerStateMessage};
-
-pub fn build_server_state_message(topics: Vec<String>, uuid: String) -> Bytes {
-  return build_proto_message(&ServerStateMessage {
-    message_type: MessageType::ServerState as i32,
-    topics,
-    uuid,
-  });
-}
+use crate::message::{AbstractMessage, MessageType};
 
 pub fn build_proto_message<T: Message>(message: &T) -> Bytes {
   return {

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use bytes::Bytes;
 use futures_util::stream::SplitSink;
 use futures_util::SinkExt;
 use tokio::{
@@ -8,6 +9,11 @@ use tokio::{
 };
 use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
+
+use crate::{
+  message::{MessageType, ServerStateMessage},
+  util::proto::build_proto_message,
+};
 
 pub struct Websock {
   pub ws: RwLock<WebSocketWrite>,
@@ -49,6 +55,14 @@ impl TopicsMap {
     return Self {
       topic_map: RwLock::new(HashMap::new()),
     };
+  }
+
+  pub async fn to_proto(&self, uuid: String) -> Bytes {
+    build_proto_message(&ServerStateMessage {
+      topics: self.get_all_topics().await,
+      message_type: MessageType::ServerState as i32,
+      uuid,
+    })
   }
 
   pub async fn get(&self) -> tokio::sync::RwLockReadGuard<'_, TopicMap> {

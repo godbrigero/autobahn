@@ -11,7 +11,6 @@ use crate::{
     topics_map::{WebSocketWrite, Websock},
     Server,
   },
-  util::proto::build_server_state_message,
 };
 
 impl Server {
@@ -32,8 +31,7 @@ impl Server {
       .push(subscribe_message.topic.clone(), ws_write)
       .await;
 
-    let server_state_message =
-      build_server_state_message(self.topics_map.get_all_topics().await, self.uuid.clone());
+    let server_state_message = self.topics_map.to_proto(self.uuid.clone()).await;
 
     self
       .peers_map

@@ -11,7 +11,6 @@ use crate::{
     util::optimally_send_peers,
     Server,
   },
-  util::proto::build_server_state_message,
 };
 
 impl Server {
@@ -31,8 +30,7 @@ impl Server {
       .remove_subscriber_from_topic(&unsubscribe_message.topic, &ws_write)
       .await;
 
-    let message =
-      build_server_state_message(self.topics_map.get_all_topics().await, self.uuid.clone());
+    let message = self.topics_map.to_proto(self.uuid.clone()).await;
 
     self
       .peers_map
