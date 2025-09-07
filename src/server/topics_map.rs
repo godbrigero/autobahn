@@ -120,7 +120,7 @@ impl TopicsMap {
   pub async fn remove_subscriber(&self, ws: &Websock) {
     let topic_map = self.topic_map.read().await;
     for topic in topic_map.iter() {
-      topic.1.write().await.retain(|w| w.as_ref().eq(ws));
+      topic.1.write().await.retain(|w| !w.as_ref().eq(ws));
     }
 
     drop(topic_map);

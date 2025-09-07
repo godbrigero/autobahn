@@ -31,8 +31,6 @@ impl Server {
       )
       .await;
 
-    // PEERS
-
     self
       .peers_map
       .send_to_peers(&topic_message.topic, bytes)
