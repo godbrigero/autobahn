@@ -27,32 +27,13 @@ impl Server {
         let publish_message = PublishMessage::decode(bytes.clone())
           .expect("Error decoding publish message in server_forward");
 
-        let subscribers = self
+        self
           .topics_map
-          .lock()
-          .await
-          .get()
-          .get(&publish_message.topic)
-          .cloned()
-          .unwrap_or_else(Vec::new);
-
-        debug!(
-          "Handling publish message from server forward {}",
-          subscribers.len()
-        );
-
-        let futures = subscribers.iter().map(|client| {
-          let bytes = bytes.clone();
-          async move {
-            let _ = client
-              .lock()
-              .await
-              .send(tungstenite::Message::Binary(bytes))
-              .await;
-          }
-        });
-
-        futures_util::future::join_all(futures).await;
+          .send_to_topic(
+            &publish_message.topic,
+            tungstenite::Message::Binary(bytes.clone()),
+          )
+          .await;
       }
       _ => {}
     }

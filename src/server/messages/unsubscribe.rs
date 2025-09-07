@@ -6,12 +6,16 @@ use prost::Message;
 
 use crate::{
   message::UnsubscribeMessage,
-  server::{topics_map::WebSocketWrite, util::optimally_send_peers, Server},
+  server::{
+    topics_map::{WebSocketWrite, Websock},
+    util::optimally_send_peers,
+    Server,
+  },
   util::proto::build_server_state_message,
 };
 
 impl Server {
-  pub async fn handle_unsubscribe(self: Arc<Self>, bytes: Bytes, ws_write: WebSocketWrite) {
+  pub async fn handle_unsubscribe(self: Arc<Self>, bytes: Bytes, ws_write: Arc<Websock>) {
     let unsubscribe_message = match UnsubscribeMessage::decode(bytes.clone()) {
       Ok(msg) => {
         debug!("Client unsubscribing from topic: {}", msg.topic);
@@ -22,14 +26,17 @@ impl Server {
         return;
       }
     };
-    let mut topics_map = self.topics_map.lock().await;
-    topics_map.remove_subscriber_from_topic(&unsubscribe_message.topic, &ws_write);
-    let message = build_server_state_message(
-      topics_map.get().keys().cloned().collect(),
-      self.uuid.clone(),
-    );
-    drop(topics_map);
+    self
+      .topics_map
+      .remove_subscriber_from_topic(&unsubscribe_message.topic, &ws_write)
+      .await;
 
-    optimally_send_peers(message, self.peers_map.lock().await.values_mut().collect()).await;
+    let message =
+      build_server_state_message(self.topics_map.get_all_topics().await, self.uuid.clone());
+
+    self
+      .peers_map
+      .send_to_peers(&unsubscribe_message.topic, message)
+      .await;
   }
 }

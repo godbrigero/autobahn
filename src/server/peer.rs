@@ -13,14 +13,11 @@ use tungstenite::protocol::WebSocketConfig;
 
 use crate::{message::ServerStateMessage, util::ws::get_config, util::Address};
 
-#[derive(Getters)]
 pub struct Peer {
   topics: HashSet<String>,
   websocket: Option<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Message>>,
 
-  #[get = "pub"]
   server_id: Option<String>,
-  #[get = "pub"]
   address: Address,
 }
 
@@ -51,6 +48,14 @@ impl Peer {
 
   pub fn is_connected(&self) -> bool {
     self.websocket.is_some()
+  }
+
+  pub fn address(&self) -> Address {
+    self.address.clone()
+  }
+
+  pub fn server_id(&self) -> Option<String> {
+    self.server_id.clone()
   }
 
   pub fn update_topics(&mut self, new_topics: Vec<String>) {

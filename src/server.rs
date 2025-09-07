@@ -10,7 +10,7 @@ use peer::Peer;
 use prost::Message;
 use tokio::{
   net::{TcpListener, TcpStream},
-  sync::Mutex,
+  sync::{Mutex, RwLock},
 };
 use tokio_tungstenite::{
   accept_async_with_config, tungstenite::protocol::WebSocketConfig, WebSocketStream,
@@ -23,7 +23,11 @@ use crate::{
     AbstractMessage, MessageType, PublishMessage, ServerForwardMessage, ServerStateMessage,
     TopicMessage, UnsubscribeMessage,
   },
-  server::util::{optimally_send_peers, send_peers_server_msg},
+  server::{
+    peers_map::PeersMap,
+    topics_map::Websock,
+    util::{optimally_send_peers, send_peers_server_msg},
+  },
   util::{
     proto::{build_proto_message, build_server_state_message, get_message_type},
     ws::get_config,
@@ -33,76 +37,51 @@ use crate::{
 
 mod messages;
 mod peer;
+mod peers_map;
 mod topics_map;
 mod util;
 
 #[external_doc(path = "src/docs/server.md", key = "Server")]
 pub struct Server {
-  listener: Mutex<Option<TcpListener>>,
   address: Address,
-  topics_map: Arc<Mutex<TopicsMap>>,
-  peers_map: Arc<Mutex<HashMap<Address, Peer>>>,
+  topics_map: Arc<TopicsMap>,
+  peers_map: Arc<PeersMap>,
   uuid: String,
 }
 
 impl Server {
-  pub fn new(peer_addrs: Vec<Address>, self_addr: Address) -> Self {
+  pub fn new(peer_addrs: Vec<Address>, self_addr: Address) -> Arc<Self> {
     debug!("Creating new server with {} peers", peer_addrs.len());
     let peers = peer_addrs
       .iter()
-      .map(|peer_addr| (peer_addr.clone(), Peer::new(peer_addr.clone())))
-      .collect::<HashMap<Address, Peer>>();
+      .map(|peer_addr| Peer::new(peer_addr.clone()))
+      .collect::<Vec<Peer>>();
 
-    return Self {
-      listener: Mutex::new(None),
+    return Arc::new(Self {
       address: self_addr,
-      topics_map: Arc::new(Mutex::new(TopicsMap::new())),
-      peers_map: Arc::new(Mutex::new(peers)),
+      topics_map: Arc::new(TopicsMap::new()),
+      peers_map: Arc::new(PeersMap::new_with_peers(peers)),
       uuid: Uuid::new_v4().to_string(),
-    };
+    });
   }
 
   pub async fn add_peer(self: Arc<Self>, peer_addr: Address) {
-    let mut peers = self.peers_map.lock().await;
+    self.peers_map.add_peer(Peer::new(peer_addr.clone())).await;
     debug!("Adding peer: {}", peer_addr);
 
-    if peers.contains_key(&peer_addr) {
+    if self.peers_map.contains_peer_addr(&peer_addr).await {
       debug!("Peer already exists: {}", peer_addr);
       return;
     }
 
-    peers.insert(peer_addr.clone(), Peer::new(peer_addr));
+    self.peers_map.add_peer(Peer::new(peer_addr)).await;
   }
 
   // TODO: make sure this works and is safe in prod.
   fn connection_ensure_loop(self: Arc<Self>) {
     tokio::spawn(async move {
       loop {
-        // Copy keys to avoid holding the map lock across awaits
-        let peer_addresses: Vec<Address> = {
-          let peers = self.peers_map.lock().await;
-          peers.keys().cloned().collect()
-        };
-
-        let mut any_failed = false;
-        for addr in peer_addresses {
-          // Temporarily remove the peer to avoid holding the lock across await
-          let peer = {
-            let mut peers = self.peers_map.lock().await;
-            peers.remove(&addr)
-          };
-
-          if let Some(mut peer_val) = peer {
-            let ok = peer_val.ensure_connection().await;
-            if !ok {
-              any_failed = true;
-            }
-            // Put the peer back
-            let mut peers = self.peers_map.lock().await;
-            peers.insert(addr.clone(), peer_val);
-          }
-        }
-
+        let any_failed = self.peers_map.ensure_connections().await;
         if any_failed {
           error!("Failed to connect to some peers, retrying in 1 seconds...");
         }
@@ -112,19 +91,16 @@ impl Server {
   }
 
   pub async fn start(self: Arc<Self>) {
-    let mut listener = self.listener.lock().await;
-    *listener = Some(
-      TcpListener::bind(format!("0.0.0.0:{}", self.address.port))
-        .await
-        .expect("Failed to bind server"),
-    );
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", self.address.port))
+      .await
+      .expect("Failed to bind server");
 
     info!("Server started on {}", self.address.build_ws_url());
     debug!("Server UUID: {}", self.uuid);
 
     self.clone().connection_ensure_loop();
 
-    while let Ok((stream, addr)) = listener.as_mut().unwrap().accept().await {
+    while let Ok((stream, addr)) = listener.accept().await {
       debug!("New client connection from {}", addr);
       let self_clone = self.clone();
       tokio::spawn(async move {
@@ -143,15 +119,16 @@ impl Server {
   async fn handle_client(self: Arc<Self>, ws_stream: WebSocketStream<TcpStream>) {
     debug!("Handling new client connection");
     let (mut write, mut read) = ws_stream.split();
+    let topics = self.topics_map.get_all_topics().await;
     write
       .send(tungstenite::Message::Binary(build_server_state_message(
-        self.topics_map.lock().await.get_all_topics(),
+        topics,
         self.uuid.clone(),
       )))
       .await
       .expect("Error handle_client, write.send()");
 
-    let ws_write = Arc::new(Mutex::new(write));
+    let ws_write = Arc::new(Websock::new(write));
     while let Some(msg) = read.next().await {
       let message = match msg {
         Ok(tungstenite::Message::Close(_)) => {
@@ -188,35 +165,31 @@ impl Server {
     }
   }
 
-  async fn handle_client_disconnected(self: Arc<Self>, ws_write: WebSocketWrite) {
+  async fn handle_client_disconnected(self: Arc<Self>, ws_write: Arc<Websock>) {
     debug!("Handling client disconnection");
-    let mut topics_map = self.topics_map.lock().await;
-    topics_map.remove_subscriber(&ws_write);
-    let server_state_message = build_server_state_message(
-      topics_map.get().keys().cloned().collect(),
-      self.uuid.clone(),
-    );
-    drop(topics_map);
+    self.topics_map.remove_subscriber(&ws_write).await;
+    let topics = self.topics_map.get_all_topics().await;
+    let server_state_message = build_server_state_message(topics, self.uuid.clone());
 
-    send_peers_server_msg(
-      server_state_message,
-      self.peers_map.lock().await.values_mut().collect(),
-    )
-    .await;
+    self.peers_map.send_to_all(server_state_message).await;
   }
 
   async fn handle_message(
     self: Arc<Self>,
     message_type: MessageType,
     bytes: Bytes,
-    ws_write: WebSocketWrite,
+    ws_write: Arc<Websock>,
   ) {
     debug!("Processing message of type: {:?}", message_type);
     match message_type {
-      MessageType::ServerState => Self::handle_server_state(
-        ServerStateMessage::decode(bytes).expect("Failed decoding MessageType::ServerState"),
-        self.peers_map.lock().await.values_mut().collect(),
-      ),
+      MessageType::ServerState => {
+        self
+          .clone()
+          .handle_server_state(
+            ServerStateMessage::decode(bytes).expect("Failed decoding MessageType::ServerState"),
+          )
+          .await
+      }
       MessageType::ServerForward => {
         self
           .clone()
@@ -252,8 +225,8 @@ mod tests {
     let server = Server::new(peer_addrs.clone(), self_addr.clone());
 
     assert_eq!(server.address, self_addr);
-    assert_eq!(server.peers_map.lock().await.len(), 1);
-    assert!(server.topics_map.lock().await.get().is_empty());
+    assert_eq!(server.peers_map.len().await, 1);
+    assert!(server.topics_map.get_all_topics().await.is_empty());
   }
 
   #[tokio::test]
@@ -263,9 +236,8 @@ mod tests {
 
     let peer_addr = peer_addrs[0].clone();
     let server = Server::new(peer_addrs.clone(), self_addr.clone());
-    let mut peer_map = server.peers_map.lock().await;
-    let peer = peer_map.get_mut(&peer_addr).unwrap();
-    assert!(!peer.is_connected());
+    let peer = server.peers_map.get_by_addr(&peer_addr).await.unwrap();
+    assert!(!peer.read().await.is_connected());
   }
 
   // Add more test functions for other server functionality

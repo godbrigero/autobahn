@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use log::debug;
 
 use crate::{
@@ -6,24 +8,18 @@ use crate::{
 };
 
 impl Server {
-  pub fn handle_server_state(server_state_message: ServerStateMessage, mut peers: Vec<&mut Peer>) {
+  pub async fn handle_server_state(self: Arc<Self>, server_state_message: ServerStateMessage) {
     debug!(
       "Handling server state message from UUID: {}",
       server_state_message.uuid
     );
 
-    let peer_gotten_from = peers
-      .iter_mut()
-      .find(|peer| {
-        if let Some(peer_server_id) = peer.server_id() {
-          peer_server_id == &server_state_message.uuid
-        } else {
-          false
-        }
-      })
-      .expect(
-        "Peer from which server message was sent from is not a valid peer: handle_server_state",
-      );
+    let peer_arc = self
+      .peers_map
+      .get_by_id(&server_state_message.uuid)
+      .await
+      .unwrap();
+    let mut peer_gotten_from = peer_arc.write().await;
 
     peer_gotten_from.update_topics(server_state_message.topics);
   }

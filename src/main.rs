@@ -16,31 +16,10 @@ async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
   }
 
-  let discovery = Arc::new(Discovery::new(config.self_addr.port as u16));
-  let server = Arc::new(Server::new(
-    config.others.unwrap_or(vec![]),
-    config.self_addr,
-  ));
-  let server_clone = server.clone();
-
-  // let discovery_broadcast_handle = discovery.clone().run_discovery_server_continuous();
-  /*let discovery_loop_handle = discovery.clone().start_discovery_loop(move |ip, port| {
-    let server_clone = server_clone.clone();
-    async move {
-      server_clone
-        .add_peer(Address {
-          host: ip,
-          port: port as i32,
-        })
-        .await;
-    }
-  });*/
-  let server_handle = server.start();
+  let server = Server::new(config.others.unwrap_or(vec![]), config.self_addr);
 
   let result = tokio::select! {
-    // _ = discovery_broadcast_handle => "Discovery broadcast loop exited",
-    // _ = discovery_loop_handle => "Discovery loop exited",
-    _ = server_handle => "Server exited",
+    _ = server.start() => "Server exited",
     _ = ctrl_c() => "Received Ctrl+C"
   };
   println!("Exiting: {}", result);
