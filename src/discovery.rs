@@ -23,7 +23,7 @@ pub struct Discovery {
 }
 
 impl Discovery {
-  pub fn new(port: u16) -> Self {
+  pub fn new(port: u16) -> Arc<Self> {
     let ip = get_local_ip_system_dependent().unwrap_or_else(|| {
       warn!("Failed to get system-dependent IP, falling back to first non-loopback IP");
       get_first_non_loopback_ip().expect("Failed to get any valid IP address")
@@ -37,7 +37,7 @@ impl Discovery {
     Self::new_with_ip(ip, port)
   }
 
-  pub fn new_with_ip(ip: String, port: u16) -> Self {
+  pub fn new_with_ip(ip: String, port: u16) -> Arc<Self> {
     info!(
       "Creating new Discovery instance with IP: {}, port: {}",
       ip, port
@@ -46,13 +46,13 @@ impl Discovery {
     let mdns = ServiceDaemon::new().unwrap();
     let receiver = mdns.browse(SERVICE).unwrap();
 
-    Self {
+    Arc::new(Self {
       mdns,
       receiver,
       addresses_found: Mutex::new(HashMap::new()),
       self_ip: ip,
       self_port: port,
-    }
+    })
   }
 
   pub async fn start_discovery_loop<F, Fut>(self: Arc<Self>, on_discovery: F)
@@ -92,8 +92,8 @@ impl Discovery {
           }
         }
         ServiceEvent::ServiceRemoved(_, fullname) => {
-          let mut addresses_found = self.addresses_found.lock().await;
-          if let Some(addr) = addresses_found.remove(&fullname.to_string()) {
+          let addresses_found = self.addresses_found.lock().await;
+          if let Some(addr) = addresses_found.get(&fullname.to_string()) {
             info!("Service removed: {} at {}", fullname, addr);
           }
         }

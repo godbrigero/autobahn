@@ -3,7 +3,7 @@ use std::{collections::HashSet, hash::Hash};
 use bytes::Bytes;
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use getset::Getters;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use prost::Message;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
@@ -80,13 +80,21 @@ impl Peer {
   }
    */
 
-  pub async fn send_raw(&mut self, payload: Bytes) {
+  pub async fn send_raw(&mut self, payload: Bytes) -> bool {
     debug!(
       "Sending raw message to peer, payload size: {} bytes",
       payload.len()
     );
+
     self.ensure_connection().await;
-    assert!(self.websocket.is_some());
+    if self.websocket.is_none() {
+      warn!(
+        "Dropped payload of size {} bytes because can't send to other server. (send_raw())",
+        payload.len()
+      );
+      return false;
+    }
+
     match self
       .websocket
       .as_mut()
@@ -94,12 +102,23 @@ impl Peer {
       .send(tungstenite::Message::Binary(payload))
       .await
     {
-      Ok(_) => debug!("Successfully sent message to peer"),
+      Ok(_) => {
+        debug!("Successfully sent message to peer");
+        return true;
+      }
 
       Err(e) => {
-        self.websocket = None;
+        self.close_websock().await;
         error!("Failed to send message to peer: {}", e);
+        return false;
       }
+    }
+  }
+
+  pub async fn close_websock(&mut self) {
+    match self.websocket.take().unwrap().close().await {
+      Ok(_) => debug!("Successfully closed websocket"),
+      Err(e) => error!("Failed to close websocket: {}", e),
     }
   }
 
@@ -110,10 +129,10 @@ impl Peer {
     }
 
     info!(
-      "Establishing new connection to {}",
+      "Trying to establish a new connection to {}",
       self.address.build_ws_url()
     );
-    let mut config = get_config();
+    let config = get_config();
 
     let req_result =
       match connect_async_with_config(self.address.build_ws_url(), Some(config), false).await {

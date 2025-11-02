@@ -119,7 +119,6 @@ impl Server {
   async fn handle_client(self: Arc<Self>, ws_stream: WebSocketStream<TcpStream>) {
     debug!("Handling new client connection");
     let (mut write, mut read) = ws_stream.split();
-    let topics = self.topics_map.get_all_topics().await;
     write
       .send(tungstenite::Message::Binary(
         self.topics_map.to_proto(self.uuid.clone()).await,
@@ -168,7 +167,6 @@ impl Server {
     debug!("Handling client disconnection");
     self.topics_map.remove_subscriber(&ws_write).await;
     let server_state_message = self.topics_map.to_proto(self.uuid.clone()).await;
-
     self.peers_map.send_to_all(server_state_message).await;
   }
 
