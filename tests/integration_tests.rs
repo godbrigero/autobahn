@@ -53,8 +53,8 @@ async fn test_peer_communication() {
 #[tokio::test]
 async fn test_server_discovery() {
   let found_ports: Arc<Mutex<Vec<u16>>> = Arc::new(Mutex::new(Vec::new()));
-  let discovery_1 = Arc::new(Discovery::new_with_ip("127.0.0.1".to_string(), 8080));
-  let discovery_2 = Arc::new(Discovery::new(8081));
+  let discovery_1 = Discovery::new_with_ip("127.0.0.1".to_string(), 8080);
+  let discovery_2 = Discovery::new(8081);
 
   let found_ports_clone = found_ports.clone();
   let discovery_1_handle = tokio::spawn(discovery_1.start_discovery_loop(move |ip, port| {
