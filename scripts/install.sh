@@ -5,8 +5,11 @@ sudo systemctl stop autobahn
 
 # Ensure Rust toolchain is configured
 if ! command -v rustup &> /dev/null; then
-    echo "Rustup not found. Please install Rust first."
-    exit 1
+    echo "Rustup not found. Installing Rust toolchain..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    if [ -f "$HOME/.cargo/env" ]; then
+        source "$HOME/.cargo/env"
+    fi
 fi
 
 # Set default toolchain if not already set
