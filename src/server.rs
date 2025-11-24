@@ -68,13 +68,6 @@ impl Server {
   pub async fn add_peer(self: Arc<Self>, peer_addr: Address) {
     self.peers_map.add_peer(Peer::new(peer_addr.clone())).await;
     debug!("Adding peer: {}", peer_addr);
-
-    if self.peers_map.contains_peer_addr(&peer_addr).await {
-      debug!("Peer already exists: {}", peer_addr);
-      return;
-    }
-
-    self.peers_map.add_peer(Peer::new(peer_addr)).await;
   }
 
   // TODO: make sure this works and is safe in prod.

@@ -14,13 +14,16 @@ impl Server {
       server_state_message.uuid
     );
 
-    let peer_arc = self
-      .peers_map
-      .get_by_id(&server_state_message.uuid)
-      .await
-      .unwrap();
-    let mut peer_gotten_from = peer_arc.write().await;
+    let peer_arc = self.peers_map.get_by_id(&server_state_message.uuid).await;
+    if peer_arc.is_none() {
+      debug!("Peer not found, dropping server state message");
+      return;
+    }
 
-    peer_gotten_from.update_topics(server_state_message.topics);
+    let peer_gotten_from = peer_arc.unwrap();
+    peer_gotten_from
+      .write()
+      .await
+      .update_topics(server_state_message.topics);
   }
 }

@@ -1,2 +1,2 @@
-debug = false
+log_level = "Info"
 self_addr = { host = "0.0.0.0", port = 8080 }
