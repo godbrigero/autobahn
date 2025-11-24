@@ -1,15 +1,9 @@
-use futures_util::{pin_mut, StreamExt};
+use std::{future::Future, sync::Arc, time};
+
 use get_if_addrs::{get_if_addrs, IfAddr, Ifv4Addr};
 use log::{debug, info, warn};
 use mdns_sd::{Receiver, ServiceDaemon, ServiceEvent, ServiceInfo};
-use std::{
-  collections::{HashMap, HashSet},
-  fs,
-  future::Future,
-  sync::Arc,
-  time::Duration,
-};
-use tokio::{runtime::Handle, sync::Mutex, time};
+use tokio::time::{interval, Duration};
 
 const SERVICE: &str = "_autobahn._udp.local.";
 const REBROADCAST_INTERVAL: Duration = Duration::from_secs(2);
@@ -17,7 +11,6 @@ const REBROADCAST_INTERVAL: Duration = Duration::from_secs(2);
 pub struct Discovery {
   mdns: ServiceDaemon,
   receiver: Receiver<ServiceEvent>,
-  addresses_found: Mutex<HashMap<String, String>>,
   self_ip: String,
   self_port: u16,
 }
@@ -49,7 +42,6 @@ impl Discovery {
     Arc::new(Self {
       mdns,
       receiver,
-      addresses_found: Mutex::new(HashMap::new()),
       self_ip: ip,
       self_port: port,
     })
@@ -65,36 +57,21 @@ impl Discovery {
       match event {
         ServiceEvent::ServiceResolved(info) => {
           debug!("Resolved service: {:?}", info);
-          if let Some(addr) = info.get_addresses().iter().next() {
-            if addr.to_string() == self.self_ip {
-              debug!("Skipping own service at {}", addr);
+          let address = info.get_properties().get("ip");
+          let port = info.get_properties().get("port");
+          if let (Some(addr), Some(port)) = (address, port) {
+            let addr = String::from_utf8(addr.val().unwrap().to_vec()).unwrap();
+            let port = String::from_utf8(port.val().unwrap().to_vec())
+              .unwrap()
+              .parse::<u16>()
+              .unwrap();
+
+            if addr == self.self_ip {
+              info!("Skipping own service at {}:{}", addr, port);
               continue;
             }
 
-            let mut addresses_found = self.addresses_found.lock().await;
-            if addresses_found.contains_key(&info.get_fullname().to_string()) {
-              continue;
-            }
-
-            addresses_found.insert(info.get_fullname().to_string(), addr.to_string());
-
-            info!(
-              "Found new service: {} at {}:{} with properties: {:?}",
-              info.get_fullname(),
-              addr,
-              info.get_port(),
-              info.get_properties(),
-            );
-
-            drop(addresses_found);
-
-            on_discovery(addr.to_string(), info.get_port() as u16).await;
-          }
-        }
-        ServiceEvent::ServiceRemoved(_, fullname) => {
-          let addresses_found = self.addresses_found.lock().await;
-          if let Some(addr) = addresses_found.get(&fullname.to_string()) {
-            info!("Service removed: {} at {}", fullname, addr);
+            on_discovery(addr, port).await;
           }
         }
         _ => {
@@ -136,7 +113,7 @@ impl Discovery {
 
   pub async fn run_discovery_server_continuous(self: Arc<Self>) {
     info!("Starting continuous discovery server");
-    let mut interval = time::interval(REBROADCAST_INTERVAL);
+    let mut interval = interval(REBROADCAST_INTERVAL);
     loop {
       let info = self.create_service_info();
       debug!("Re-registering discovery server");

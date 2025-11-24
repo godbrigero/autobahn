@@ -21,6 +21,7 @@ getset = "0.1.6"
 no-incode-comments = "0.1.0"
 mdns-sd = "0.13.10"
 get_if_addrs = "0.5.3"
+futures = "0.3.31"
 
 [[bin]]
 name = "autobahn"

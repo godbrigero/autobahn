@@ -19,6 +19,19 @@ pub struct Peer {
 
   server_id: Option<String>,
   address: Address,
+
+  connection_attempts: u32,
+}
+
+impl std::fmt::Debug for Peer {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(
+      f,
+      "Peer(server_id: {}, address: {})",
+      self.server_id.as_ref().unwrap_or(&String::default()),
+      self.address.to_string()
+    )
+  }
 }
 
 impl PartialEq for Peer {
@@ -43,11 +56,16 @@ impl Peer {
       topics: HashSet::new(),
       websocket: None,
       server_id: None,
+      connection_attempts: 0,
     };
   }
 
   pub fn is_connected(&self) -> bool {
     self.websocket.is_some()
+  }
+
+  pub fn get_connection_attempts(&self) -> u32 {
+    self.connection_attempts
   }
 
   pub fn address(&self) -> Address {
@@ -132,6 +150,7 @@ impl Peer {
       "Trying to establish a new connection to {}",
       self.address.build_ws_url()
     );
+    self.connection_attempts += 1;
     let config = get_config();
 
     let req_result =
@@ -181,6 +200,7 @@ impl Peer {
     self.server_id = Some(server_state.1);
     debug!("Peer initialization complete");
 
+    self.connection_attempts = 0;
     return true;
   }
 }

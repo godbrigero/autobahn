@@ -41,6 +41,8 @@ mod peers_map;
 mod topics_map;
 mod util;
 
+const MAX_CONNECTION_ATTEMPTS: u32 = 5;
+
 #[external_doc(path = "src/docs/server.md", key = "Server")]
 pub struct Server {
   address: Address,
@@ -67,6 +69,7 @@ impl Server {
 
   pub async fn add_peer(self: Arc<Self>, peer_addr: Address) {
     self.peers_map.add_peer(Peer::new(peer_addr.clone())).await;
+    self.peers_map.ensure_connections().await;
     debug!("Adding peer: {}", peer_addr);
   }
 
@@ -74,10 +77,21 @@ impl Server {
   fn connection_ensure_loop(self: Arc<Self>) {
     tokio::spawn(async move {
       loop {
-        let any_failed = self.peers_map.ensure_connections().await;
-        if any_failed {
+        let failed_servers = self.peers_map.ensure_connections().await;
+        info!(
+          "Current state of connections: {} peers: {:?}",
+          self.peers_map.len().await,
+          self.peers_map.get_all_peers().await,
+        );
+
+        if !failed_servers.is_empty() {
           error!("Failed to connect to some peers, retrying in 1 seconds...");
+          self
+            .peers_map
+            .check_connection_attempts_and_remove(MAX_CONNECTION_ATTEMPTS)
+            .await;
         }
+
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
       }
     });

@@ -35,7 +35,7 @@ impl Server {
 
     self
       .peers_map
-      .send_to_peers(&subscribe_message.topic, server_state_message)
+      .update_peers_self_state(server_state_message)
       .await;
   }
 }

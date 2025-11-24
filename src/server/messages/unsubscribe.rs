@@ -32,9 +32,6 @@ impl Server {
 
     let message = self.topics_map.to_proto(self.uuid.clone()).await;
 
-    self
-      .peers_map
-      .send_to_peers(&unsubscribe_message.topic, message)
-      .await;
+    self.peers_map.update_peers_self_state(message).await;
   }
 }

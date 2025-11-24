@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures::executor::block_on;
 use tokio::sync::RwLock;
 
 use crate::{server::peer::Peer, util::Address};
@@ -16,6 +17,10 @@ impl PeersMap {
     }
   }
 
+  pub async fn get_all_peers(&self) -> Vec<Arc<RwLock<Peer>>> {
+    self.peers_map.read().await.clone()
+  }
+
   pub fn new_with_peers(peers: Vec<Peer>) -> Self {
     let mut new_peers = Vec::new();
     for peer in peers {
@@ -28,10 +33,7 @@ impl PeersMap {
   }
 
   pub async fn add_peer(&self, peer: Peer) -> bool {
-    if self
-      .contains_peer(&peer.server_id().unwrap_or_default())
-      .await
-    {
+    if self.contains_peer_addr(&peer.address()).await {
       return false;
     }
 
@@ -42,6 +44,14 @@ impl PeersMap {
       .push(Arc::new(RwLock::new(peer)));
 
     return true;
+  }
+
+  pub async fn update_peers_self_state(&self, message: Bytes) {
+    let peers = self.peers_map.read().await;
+    for peer in peers.iter() {
+      let mut peer_r = peer.write().await;
+      peer_r.send_raw(message.clone()).await;
+    }
   }
 
   pub async fn send_to_peers(&self, topic: &str, message: Bytes) {
@@ -89,18 +99,26 @@ impl PeersMap {
     return false;
   }
 
-  pub async fn ensure_connections(&self) -> bool {
+  pub async fn ensure_connections(&self) -> Vec<String> {
     let peers = self.peers_map.read().await;
-    let mut any_failed = false;
+    let mut failed_servers = Vec::new();
     for peer in peers.iter() {
       let mut peer_r = peer.write().await;
       let ok = peer_r.ensure_connection().await;
       if !ok {
-        any_failed = true;
+        failed_servers.push(peer_r.server_id().unwrap_or_default());
       }
     }
 
-    return any_failed;
+    return failed_servers;
+  }
+
+  pub async fn check_connection_attempts_and_remove(&self, max_connection_attempts: u32) {
+    let mut peers = self.peers_map.write().await;
+    peers.retain(|peer| {
+      let peer_r = block_on(peer.read());
+      peer_r.get_connection_attempts() <= max_connection_attempts
+    });
   }
 
   pub async fn send_to_all(&self, message: Bytes) {

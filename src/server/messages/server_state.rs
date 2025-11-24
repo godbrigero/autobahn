@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use log::debug;
+use log::{debug, warn};
 
 use crate::{
   message::ServerStateMessage,
@@ -16,7 +16,10 @@ impl Server {
 
     let peer_arc = self.peers_map.get_by_id(&server_state_message.uuid).await;
     if peer_arc.is_none() {
-      debug!("Peer not found, dropping server state message");
+      warn!(
+        "Peer not found, dropping server state message. UUID: {}",
+        server_state_message.uuid
+      );
       return;
     }
 
