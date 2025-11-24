@@ -1,19 +1,14 @@
 #!/bin/bash
 
-# Stop the service first to avoid "Text file busy" error
 sudo systemctl stop autobahn
 
-# Ensure Rust toolchain is configured
 if ! command -v rustup &> /dev/null; then
     echo "Rustup not found. Installing Rust toolchain..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    if [ -f "$HOME/.cargo/env" ]; then
-        source "$HOME/.cargo/env"
-    fi
+    source "$HOME/.cargo/env"
 fi
 
-# Set default toolchain if not already set
-if ! rustup show | grep -q "default toolchain"; then
+if ! rustup toolchain list | grep -q "(default)"; then
     echo "Setting up default Rust toolchain..."
     rustup default stable
 fi
@@ -34,9 +29,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable autobahn
 
 if [ ! -f /etc/autobahn/config.toml ]; then
-    sudo mkdir -p /etc/autobahn
-    sudo cp config.toml /etc/autobahn/
+    sudo mkdir -p /etc/autobahn/
 fi
+
+sudo cp ./config.toml /etc/autobahn/config.toml
 
 echo "Restarting autobahn service..."
 sudo systemctl restart autobahn
