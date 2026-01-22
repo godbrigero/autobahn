@@ -38,6 +38,7 @@ mod tests {
       message_type: MessageType::Publish as i32,
       topic: "t".to_string(),
       payload: b"p".to_vec(),
+      ..Default::default()
     };
     let bytes = build_proto_message(&msg);
     assert_eq!(get_message_type(&bytes), MessageType::Publish);
@@ -49,6 +50,7 @@ mod tests {
       message_type: MessageType::Publish as i32,
       topic: "t".to_string(),
       payload: b"p".to_vec(),
+      ..Default::default()
     };
     let bytes = build_proto_message(&msg);
     let decoded: PublishMessage = get_message(&bytes);

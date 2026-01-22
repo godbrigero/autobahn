@@ -1,4 +1,3 @@
-use tokio::join;
 use tokio::signal::ctrl_c;
 
 use std::{env, sync::Arc};

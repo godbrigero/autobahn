@@ -67,6 +67,7 @@ fn publish_bytes(topic: &str, payload: &[u8]) -> Bytes {
     message_type: MessageType::Publish as i32,
     topic: topic.to_string(),
     payload: payload.to_vec(),
+    ..Default::default()
   })
 }
 
@@ -262,6 +263,63 @@ async fn test_peer_forwarding_delivers_to_remote_subscribers() {
   let publish = PublishMessage::decode(Bytes::from(bytes)).unwrap();
   assert_eq!(publish.topic, "shared");
   assert_eq!(publish.payload, b"from-peer");
+
+  h1.abort();
+  h2.abort();
+}
+
+#[tokio::test]
+async fn test_peer_forwarding_between_two_servers_does_not_loop_or_duplicate() {
+  // Repro for the "infinite redirect/bounce" bug: two servers that are peers,
+  // both interested in the same topic, must not endlessly re-forward the same publish.
+  let server1_addr = Address::from_str(&format!("127.0.0.1:{}", free_port())).unwrap();
+  let server2_addr = Address::from_str(&format!("127.0.0.1:{}", free_port())).unwrap();
+
+  let server1 = Server::new(vec![server2_addr.clone()], server1_addr.clone());
+  let server2 = Server::new(vec![server1_addr.clone()], server2_addr.clone());
+
+  let h1 = tokio::spawn(async move { server1.start().await });
+  let h2 = tokio::spawn(async move { server2.start().await });
+
+  tokio::time::sleep(Duration::from_millis(900)).await;
+
+  // Subscribers on both servers so each advertises interest in the topic.
+  let (mut sub1_w, mut sub1_r) = connect_client(&server1_addr).await.split();
+  let (mut sub2_w, mut sub2_r) = connect_client(&server2_addr).await.split();
+
+  sub1_w
+    .send(tungstenite::Message::Binary(subscribe_bytes("loop")))
+    .await
+    .unwrap();
+  sub2_w
+    .send(tungstenite::Message::Binary(subscribe_bytes("loop")))
+    .await
+    .unwrap();
+
+  // Let the updated server state propagate so peers see the topic.
+  tokio::time::sleep(Duration::from_millis(250)).await;
+
+  let (mut pub_w, _pub_r) = connect_client(&server1_addr).await.split();
+  pub_w
+    .send(tungstenite::Message::Binary(publish_bytes("loop", b"ping")))
+    .await
+    .unwrap();
+
+  // Both local and remote should receive exactly one publish.
+  let p1 = recv_publish(&mut sub1_r, Duration::from_secs(3))
+    .await
+    .expect("expected local publish delivery");
+  let p2 = recv_publish(&mut sub2_r, Duration::from_secs(3))
+    .await
+    .expect("expected remote publish delivery");
+  assert_eq!(p1.payload, b"ping");
+  assert_eq!(p2.payload, b"ping");
+
+  // Critically: no duplicates shortly after (would indicate a bounce loop).
+  let dup_local = recv_publish(&mut sub1_r, Duration::from_millis(350)).await;
+  let dup_remote = recv_publish(&mut sub2_r, Duration::from_millis(350)).await;
+  assert!(dup_local.is_none(), "unexpected duplicate publish on origin server");
+  assert!(dup_remote.is_none(), "unexpected duplicate publish on remote server");
 
   h1.abort();
   h2.abort();
@@ -675,6 +733,48 @@ async fn test_publish_many_messages_delivered_count() {
 }
 
 #[tokio::test]
+async fn test_same_payload_published_twice_delivers_twice() {
+  // Ensure we do NOT dedupe by (topic,payload); only by msg_id.
+  let self_addr = Address::from_str(&format!("127.0.0.1:{}", free_port())).unwrap();
+  let server = Server::new(Vec::new(), self_addr.clone());
+  let handle = tokio::spawn(async move { server.start().await });
+
+  tokio::time::sleep(Duration::from_millis(150)).await;
+
+  let (mut sub_w, mut sub_r) = connect_client(&self_addr).await.split();
+  let (mut pub_w, _pub_r) = connect_client(&self_addr).await.split();
+
+  sub_w
+    .send(tungstenite::Message::Binary(subscribe_bytes("dup")))
+    .await
+    .unwrap();
+  tokio::time::sleep(Duration::from_millis(50)).await;
+
+  pub_w
+    .send(tungstenite::Message::Binary(publish_bytes("dup", b"same")))
+    .await
+    .unwrap();
+  pub_w
+    .send(tungstenite::Message::Binary(publish_bytes("dup", b"same")))
+    .await
+    .unwrap();
+
+  let p1 = recv_publish(&mut sub_r, Duration::from_secs(2))
+    .await
+    .expect("expected first publish");
+  let p2 = recv_publish(&mut sub_r, Duration::from_secs(2))
+    .await
+    .expect("expected second publish");
+
+  assert_eq!(p1.topic, "dup");
+  assert_eq!(p2.topic, "dup");
+  assert_eq!(p1.payload, b"same");
+  assert_eq!(p2.payload, b"same");
+
+  handle.abort();
+}
+
+#[tokio::test]
 async fn test_forwarding_is_transitive_across_peers() {
   // AI test
   let server1_addr = Address::from_str(&format!("127.0.0.1:{}", free_port())).unwrap();
@@ -721,11 +821,12 @@ async fn test_forwarding_is_transitive_across_peers() {
   let got_dummy = recv_publish(&mut dummy_r, Duration::from_secs(3)).await;
   assert!(got_dummy.is_some(), "expected server2 local delivery via forwarding");
 
-  // Server3 should also receive because forwarded publishes are re-published and forwarded again.
-  let got_server3 = recv_publish(&mut sub3_r, Duration::from_secs(3)).await;
+  // Server3 should NOT receive, because ServerForward messages are delivered locally only
+  // and are not forwarded onward.
+  let got_server3 = recv_publish(&mut sub3_r, Duration::from_millis(400)).await;
   assert!(
-    got_server3.is_some(),
-    "expected transitive forwarding to server3 via server2"
+    got_server3.is_none(),
+    "unexpected transitive forwarding to server3; ServerForward should not be re-forwarded"
   );
 
   h1.abort();

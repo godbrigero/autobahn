@@ -3,15 +3,15 @@ use std::sync::Arc;
 use bytes::Bytes;
 use log::{debug, error};
 use prost::Message;
-
 use crate::{
-  message::TopicMessage,
+  message::{MessageType, PublishMessage, ServerForwardMessage},
   server::Server,
+  util::proto::build_proto_message,
 };
 
 impl Server {
   pub async fn handle_publish(self: Arc<Self>, bytes: Bytes) {
-    let topic_message = match TopicMessage::decode(bytes.clone()) {
+    let publish_message = match PublishMessage::decode(bytes.clone()) {
       Ok(msg) => {
         debug!("Publishing message to topic: {}", msg.topic);
         msg
@@ -25,14 +25,21 @@ impl Server {
     self
       .topics_map
       .send_to_topic(
-        &topic_message.topic,
+        &publish_message.topic,
         tungstenite::Message::Binary(bytes.clone()),
       )
       .await;
 
+    // Forward to peers as a ServerForwardMessage envelope.
+    let fwd = ServerForwardMessage {
+      message_type: MessageType::ServerForward as i32,
+      payload: bytes.to_vec(),
+    };
+    let fwd_bytes = build_proto_message(&fwd);
+
     self
       .peers_map
-      .send_to_peers(&topic_message.topic, bytes)
+      .send_to_peers(&publish_message.topic, fwd_bytes)
       .await;
   }
 }
@@ -83,6 +90,7 @@ mod tests {
       message_type: MessageType::Publish as i32,
       topic: "t".to_string(),
       payload: b"payload".to_vec(),
+      ..Default::default()
     };
     let bytes = build_proto_message(&publish);
 

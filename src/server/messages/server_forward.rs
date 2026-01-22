@@ -85,11 +85,13 @@ mod tests {
       message_type: MessageType::Publish as i32,
       topic: "t".to_string(),
       payload: b"fwd".to_vec(),
+      ..Default::default()
     };
     let publish_bytes = build_proto_message(&publish);
     let fwd = ServerForwardMessage {
       message_type: MessageType::ServerForward as i32,
       payload: publish_bytes.to_vec(),
+      ..Default::default()
     };
 
     server.clone().handle_server_forward(fwd).await;
@@ -118,6 +120,7 @@ mod tests {
     let fwd = ServerForwardMessage {
       message_type: MessageType::ServerForward as i32,
       payload: sub.to_vec(),
+      ..Default::default()
     };
     server.clone().handle_server_forward(fwd).await;
 

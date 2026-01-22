@@ -1,6 +1,6 @@
 // TODO: Mac -> pi DOES NOT WORK ATM at all. Mac CAN find but the pi doesn't see mac's brodcast at all.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -8,10 +8,7 @@ use log::{debug, error, info};
 use no_incode_comments::external_doc;
 use peer::Peer;
 use prost::Message;
-use tokio::{
-  net::{TcpListener, TcpStream},
-  sync::{Mutex, RwLock},
-};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{
   accept_async_with_config, tungstenite::protocol::WebSocketConfig, WebSocketStream,
 };

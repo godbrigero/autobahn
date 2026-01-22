@@ -10,6 +10,7 @@ pub async fn send_peers_server_msg(data: Bytes, peers: Vec<&mut Peer>) {
   let server_message_raw = build_proto_message(&ServerForwardMessage {
     message_type: MessageType::ServerForward as i32,
     payload: data.to_vec(),
+    ..Default::default()
   });
 
   optimally_send_peers(server_message_raw, peers).await;
@@ -57,9 +58,7 @@ mod tests {
         uuid,
         topics,
       });
-      let _ = write
-        .send(tungstenite::Message::Binary(server_state))
-        .await;
+      let _ = write.send(tungstenite::Message::Binary(server_state)).await;
 
       while let Some(Ok(msg)) = read.next().await {
         let _ = tx.send(Bytes::from(msg.into_data()));
