@@ -1,15 +1,69 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use log::debug;
+use log::{debug, error};
 use prost::Message;
 
 use crate::{
-  message::{
-    AbstractMessage, MessageType, PublishMessage, ServerForwardMessage,
-  },
-  server::Server,
+  message::{AbstractMessage, MessageType, PublishMessage, ServerForwardMessage},
+  server::{topics_map::Websock, Server, ServerMessageHandler},
+  util::low_level::ExpectedTypedBytes,
 };
+
+impl ServerMessageHandler<ServerForwardMessage> for Server {
+  async fn handle(
+    self: Arc<Self>,
+    bytes: ExpectedTypedBytes<ServerForwardMessage>,
+    _ws_write: Arc<Websock>,
+  ) -> Result<(), String> {
+    debug!("Handling server forward message");
+    let server_forward_message = match ServerForwardMessage::decode(bytes.clone()) {
+      Ok(msg) => {
+        debug!("Server forward message: {:?}", msg);
+        msg
+      }
+      Err(e) => {
+        error!("Error decoding server forward message: {}", e);
+        return Err(e.to_string());
+      }
+    };
+
+    let bytes = Bytes::from(server_forward_message.payload);
+    let abstract_message = match AbstractMessage::decode(bytes.clone()) {
+      Ok(msg) => {
+        debug!("Abstract message: {:?}", msg);
+        msg
+      }
+      Err(e) => {
+        error!("Error decoding abstract message: {}", e);
+        return Err(e.to_string());
+      }
+    };
+
+    match MessageType::try_from(abstract_message.message_type).unwrap() {
+      MessageType::Publish => {
+        let publish_message = match PublishMessage::decode(bytes.clone()) {
+          Ok(msg) => {
+            debug!("Publish message: {:?}", msg);
+            msg
+          }
+          Err(e) => {
+            error!("Error decoding publish message: {}", e);
+            return Err(e.to_string());
+          }
+        };
+
+        self
+          .topics_map
+          .send_to_topic(&publish_message.topic, tungstenite::Message::Binary(bytes))
+          .await;
+      }
+      _ => {}
+    }
+
+    Ok(())
+  }
+}
 
 impl Server {
   pub async fn handle_server_forward(
@@ -45,14 +99,15 @@ mod tests {
   use crate::{
     message::{MessageType, PublishMessage, TopicMessage},
     server::topics_map::Websock,
-    util::{proto::build_proto_message, Address},
+    util::{low_level::ExpectedTypedBytes, proto::build_proto_message, Address},
   };
   use futures_util::StreamExt;
   use tokio::net::TcpListener;
   use tokio::sync::mpsc;
   use tokio_tungstenite::tungstenite;
 
-  async fn create_ws_with_receiver() -> (Arc<Websock>, mpsc::UnboundedReceiver<tungstenite::Message>) {
+  async fn create_ws_with_receiver() -> (Arc<Websock>, mpsc::UnboundedReceiver<tungstenite::Message>)
+  {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (tx, rx) = mpsc::unbounded_channel::<tungstenite::Message>();
@@ -94,7 +149,14 @@ mod tests {
       ..Default::default()
     };
 
-    server.clone().handle_server_forward(fwd).await;
+    let result = server
+      .clone()
+      .handle(
+        ExpectedTypedBytes::<ServerForwardMessage>::from(build_proto_message(&fwd)),
+        create_ws_with_receiver().await.0,
+      )
+      .await;
+    assert!(result.is_ok());
 
     let msg = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
       .await
@@ -122,9 +184,31 @@ mod tests {
       payload: sub.to_vec(),
       ..Default::default()
     };
-    server.clone().handle_server_forward(fwd).await;
+    let result = server
+      .clone()
+      .handle(
+        ExpectedTypedBytes::<ServerForwardMessage>::from(build_proto_message(&fwd)),
+        create_ws_with_receiver().await.0,
+      )
+      .await;
+    assert!(result.is_ok());
 
     let res = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await;
     assert!(res.is_err());
+  }
+
+  #[tokio::test]
+  async fn test_handle_server_forward_bad_bytes_returns_err() {
+    let server = Server::new(Vec::new(), Address::from_str("127.0.0.1:0").unwrap());
+
+    let result = server
+      .clone()
+      .handle(
+        ExpectedTypedBytes::<ServerForwardMessage>::from(Bytes::from_static(b"bad")),
+        create_ws_with_receiver().await.0,
+      )
+      .await;
+
+    assert!(result.is_err());
   }
 }

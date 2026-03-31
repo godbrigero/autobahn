@@ -5,3 +5,5 @@ target/
 *.pyd
 *.pyw
 *.pyz
+autobahn.code-workspace
+.DS_Store

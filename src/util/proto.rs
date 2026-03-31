@@ -2,7 +2,13 @@ use bytes::{Bytes, BytesMut};
 use log::error;
 use prost::Message;
 
-use crate::message::{AbstractMessage, MessageType};
+use crate::{
+  message::{
+    AbstractMessage, HeartbeatMessage, MessageType, PublishMessage, ServerForwardMessage,
+    ServerStateMessage, TopicMessage, UnsubscribeMessage,
+  },
+  util::low_level::ExpectedTypedBytes,
+};
 
 pub fn build_proto_message<T: Message>(message: &T) -> Bytes {
   return {

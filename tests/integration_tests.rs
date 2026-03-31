@@ -1,8 +1,8 @@
 use autobahn::{
   discovery::Discovery,
-  message::{MessageType, PublishMessage, TopicMessage, UnsubscribeMessage},
+  message::{HeartbeatMessage, MessageType, PublishMessage, TopicMessage, UnsubscribeMessage},
   server::Server,
-  util::{proto::build_proto_message, Address},
+  util::{proto::{build_proto_message, get_message_type}, Address},
 };
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -15,7 +15,7 @@ use tokio_tungstenite::{connect_async, tungstenite, MaybeTlsStream, WebSocketStr
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type WsRead = futures_util::stream::SplitStream<WsStream>;
-type WsWrite = futures_util::stream::SplitSink<WsStream, tungstenite::Message>;
+const HEARTBEAT_PROPAGATION_WAIT: Duration = Duration::from_millis(1500);
 
 fn free_port() -> u16 {
   TcpListener::bind("127.0.0.1:0")
@@ -28,7 +28,7 @@ fn free_port() -> u16 {
 async fn connect_client(addr: &Address) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
   let url = format!("ws://{}", addr);
   let (ws, _resp) = connect_async(url).await.expect("failed to connect");
-  let (mut write, mut read) = ws.split();
+  let (write, mut read) = ws.split();
 
   // Server sends a ServerStateMessage immediately on connect; drain it so tests start cleanly.
   let _ = tokio::time::timeout(Duration::from_secs(1), read.next())
@@ -41,10 +41,28 @@ async fn connect_client(addr: &Address) -> WebSocketStream<MaybeTlsStream<TcpStr
 }
 
 async fn recv_publish(read: &mut WsRead, timeout: Duration) -> Option<PublishMessage> {
-  let msg = tokio::time::timeout(timeout, read.next()).await.ok()??.ok()?;
-  match msg {
-    tungstenite::Message::Binary(bytes) => PublishMessage::decode(Bytes::from(bytes)).ok(),
-    _ => None,
+  let deadline = tokio::time::Instant::now() + timeout;
+
+  loop {
+    let remaining = deadline.checked_duration_since(tokio::time::Instant::now())?;
+    let msg = tokio::time::timeout(remaining, read.next())
+      .await
+      .ok()??
+      .ok()?;
+
+    match msg {
+      tungstenite::Message::Binary(bytes) => {
+        let bytes = Bytes::from(bytes);
+        match get_message_type(&bytes) {
+          MessageType::Publish => return PublishMessage::decode(bytes).ok(),
+          MessageType::Heartbeat | MessageType::ServerState => continue,
+          other => panic!("unexpected binary message while waiting for publish: {:?}", other),
+        }
+      }
+      tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => continue,
+      tungstenite::Message::Close(_) => return None,
+      _ => continue,
+    }
   }
 }
 
@@ -68,6 +86,14 @@ fn publish_bytes(topic: &str, payload: &[u8]) -> Bytes {
     topic: topic.to_string(),
     payload: payload.to_vec(),
     ..Default::default()
+  })
+}
+
+fn heartbeat_bytes(topics: &[&str]) -> Bytes {
+  build_proto_message(&HeartbeatMessage {
+    message_type: MessageType::Heartbeat as i32,
+    uuid: None,
+    topics: topics.iter().map(|topic| topic.to_string()).collect(),
   })
 }
 
@@ -167,17 +193,10 @@ async fn test_single_server_pubsub_delivery() {
     .await
     .unwrap();
 
-  // Subscriber should receive the publish.
-  let msg = tokio::time::timeout(Duration::from_secs(2), sub_read.next())
+  // Subscriber should receive the publish, even if heartbeat frames are interleaved.
+  let publish = recv_publish(&mut sub_read, Duration::from_secs(2))
     .await
-    .unwrap()
-    .unwrap()
-    .unwrap();
-
-  let tungstenite::Message::Binary(bytes) = msg else {
-    panic!("expected binary publish");
-  };
-  let publish = PublishMessage::decode(Bytes::from(bytes)).unwrap();
+    .expect("expected publish");
   assert_eq!(publish.topic, "t1");
   assert_eq!(publish.payload, b"hello");
 
@@ -221,6 +240,37 @@ async fn test_unsubscribe_stops_delivery() {
 }
 
 #[tokio::test]
+async fn test_heartbeat_registers_client_topics_for_delivery() {
+  let self_addr = Address::from_str(&format!("127.0.0.1:{}", free_port())).unwrap();
+  let server = Server::new(Vec::new(), self_addr.clone());
+  let handle = tokio::spawn(async move { server.start().await });
+
+  tokio::time::sleep(Duration::from_millis(150)).await;
+
+  let (mut heartbeat_write, mut heartbeat_read) = connect_client(&self_addr).await.split();
+  let (mut pub_write, _pub_read) = connect_client(&self_addr).await.split();
+
+  heartbeat_write
+    .send(tungstenite::Message::Binary(heartbeat_bytes(&["hb"])))
+    .await
+    .unwrap();
+  tokio::time::sleep(Duration::from_millis(50)).await;
+
+  pub_write
+    .send(tungstenite::Message::Binary(publish_bytes("hb", b"pulse")))
+    .await
+    .unwrap();
+
+  let publish = recv_publish(&mut heartbeat_read, Duration::from_secs(2))
+    .await
+    .expect("expected publish after heartbeat topic registration");
+  assert_eq!(publish.topic, "hb");
+  assert_eq!(publish.payload, b"pulse");
+
+  handle.abort();
+}
+
+#[tokio::test]
 async fn test_peer_forwarding_delivers_to_remote_subscribers() {
   // AI test
   let server1_addr = Address::from_str(&format!("127.0.0.1:{}", free_port())).unwrap();
@@ -240,7 +290,7 @@ async fn test_peer_forwarding_delivers_to_remote_subscribers() {
     .await
     .unwrap();
 
-  tokio::time::sleep(Duration::from_millis(100)).await;
+  tokio::time::sleep(HEARTBEAT_PROPAGATION_WAIT).await;
 
   let (mut pub_write, _pub_read) = connect_client(&server1_addr).await.split();
   pub_write
@@ -251,16 +301,9 @@ async fn test_peer_forwarding_delivers_to_remote_subscribers() {
     .await
     .unwrap();
 
-  let msg = tokio::time::timeout(Duration::from_secs(3), sub_read.next())
+  let publish = recv_publish(&mut sub_read, Duration::from_secs(3))
     .await
-    .unwrap()
-    .unwrap()
-    .unwrap();
-
-  let tungstenite::Message::Binary(bytes) = msg else {
-    panic!("expected binary publish");
-  };
-  let publish = PublishMessage::decode(Bytes::from(bytes)).unwrap();
+    .expect("expected forwarded publish");
   assert_eq!(publish.topic, "shared");
   assert_eq!(publish.payload, b"from-peer");
 
@@ -296,8 +339,8 @@ async fn test_peer_forwarding_between_two_servers_does_not_loop_or_duplicate() {
     .await
     .unwrap();
 
-  // Let the updated server state propagate so peers see the topic.
-  tokio::time::sleep(Duration::from_millis(250)).await;
+  // Let a heartbeat round propagate topic interest to peers.
+  tokio::time::sleep(HEARTBEAT_PROPAGATION_WAIT).await;
 
   let (mut pub_w, _pub_r) = connect_client(&server1_addr).await.split();
   pub_w
@@ -318,8 +361,14 @@ async fn test_peer_forwarding_between_two_servers_does_not_loop_or_duplicate() {
   // Critically: no duplicates shortly after (would indicate a bounce loop).
   let dup_local = recv_publish(&mut sub1_r, Duration::from_millis(350)).await;
   let dup_remote = recv_publish(&mut sub2_r, Duration::from_millis(350)).await;
-  assert!(dup_local.is_none(), "unexpected duplicate publish on origin server");
-  assert!(dup_remote.is_none(), "unexpected duplicate publish on remote server");
+  assert!(
+    dup_local.is_none(),
+    "unexpected duplicate publish on origin server"
+  );
+  assert!(
+    dup_remote.is_none(),
+    "unexpected duplicate publish on remote server"
+  );
 
   h1.abort();
   h2.abort();
@@ -360,16 +409,9 @@ async fn test_reconnect_new_subscriber_receives_after_old_disconnect() {
     .await
     .unwrap();
 
-  let msg = tokio::time::timeout(Duration::from_secs(2), sub_read.next())
+  let publish = recv_publish(&mut sub_read, Duration::from_secs(2))
     .await
-    .unwrap()
-    .unwrap()
-    .unwrap();
-
-  let tungstenite::Message::Binary(bytes) = msg else {
-    panic!("expected binary publish");
-  };
-  let publish = PublishMessage::decode(Bytes::from(bytes)).unwrap();
+    .expect("expected publish");
   assert_eq!(publish.payload, b"ok");
 
   handle.abort();
@@ -382,7 +424,7 @@ async fn test_two_subscribers_both_receive_local() {
   let server = Server::new(Vec::new(), self_addr.clone());
   let handle = tokio::spawn(async move { server.start().await });
 
-  tokio::time::sleep(Duration::from_millis(150)).await;
+  tokio::time::sleep(HEARTBEAT_PROPAGATION_WAIT).await;
 
   let (mut w1, mut r1) = connect_client(&self_addr).await.split();
   let (mut w2, mut r2) = connect_client(&self_addr).await.split();
@@ -415,7 +457,7 @@ async fn test_topic_isolation_local_no_cross_delivery() {
   let server = Server::new(Vec::new(), self_addr.clone());
   let handle = tokio::spawn(async move { server.start().await });
 
-  tokio::time::sleep(Duration::from_millis(150)).await;
+  tokio::time::sleep(HEARTBEAT_PROPAGATION_WAIT).await;
 
   let (mut sub_w, mut sub_r) = connect_client(&self_addr).await.split();
   let (mut pub_w, _pub_r) = connect_client(&self_addr).await.split();
@@ -432,7 +474,10 @@ async fn test_topic_isolation_local_no_cross_delivery() {
     .unwrap();
 
   let res = tokio::time::timeout(Duration::from_millis(300), sub_r.next()).await;
-  assert!(res.is_err(), "subscriber to topic a should not receive topic b");
+  assert!(
+    res.is_err(),
+    "subscriber to topic a should not receive topic b"
+  );
 
   handle.abort();
 }
@@ -527,7 +572,10 @@ async fn test_unsubscribe_one_topic_keeps_other() {
   assert_eq!(p.payload, b"yes");
 
   let res = tokio::time::timeout(Duration::from_millis(300), sub_r.next()).await;
-  assert!(res.is_err(), "should not receive extra messages for unsubscribed topic");
+  assert!(
+    res.is_err(),
+    "should not receive extra messages for unsubscribed topic"
+  );
 
   handle.abort();
 }
@@ -573,7 +621,9 @@ async fn test_server_survives_bad_client_message_and_accepts_new_clients() {
   {
     let (mut w, _r) = connect_client(&self_addr).await.split();
     let _ = w
-      .send(tungstenite::Message::Binary(Bytes::from_static(b"not-a-proto")))
+      .send(tungstenite::Message::Binary(Bytes::from_static(
+        b"not-a-proto",
+      )))
       .await;
   }
 
@@ -626,8 +676,7 @@ async fn test_peer_forwarding_multiple_subscribers_remote() {
   let (mut pub_w, _pub_r) = connect_client(&server1_addr).await.split();
   pub_w
     .send(tungstenite::Message::Binary(publish_bytes(
-      "shared2",
-      b"fanout",
+      "shared2", b"fanout",
     )))
     .await
     .unwrap();
@@ -674,14 +723,17 @@ async fn test_peer_forwarding_stops_after_remote_unsubscribe() {
     .send(tungstenite::Message::Binary(unsubscribe_bytes("g")))
     .await
     .unwrap();
-  tokio::time::sleep(Duration::from_millis(200)).await;
+  tokio::time::sleep(HEARTBEAT_PROPAGATION_WAIT).await;
 
   pub_w
     .send(tungstenite::Message::Binary(publish_bytes("g", b"2")))
     .await
     .unwrap();
-  let res = tokio::time::timeout(Duration::from_millis(400), sub_r.next()).await;
-  assert!(res.is_err(), "expected no delivery after remote unsubscribe");
+  let res = recv_publish(&mut sub_r, Duration::from_millis(400)).await;
+  assert!(
+    res.is_none(),
+    "expected no delivery after remote unsubscribe"
+  );
 
   h1.abort();
   h2.abort();
@@ -783,7 +835,10 @@ async fn test_forwarding_is_transitive_across_peers() {
 
   // Topology: server1 <-> server2 <-> server3 (server1 does not know server3).
   let server1 = Server::new(vec![server2_addr.clone()], server1_addr.clone());
-  let server2 = Server::new(vec![server1_addr.clone(), server3_addr.clone()], server2_addr.clone());
+  let server2 = Server::new(
+    vec![server1_addr.clone(), server3_addr.clone()],
+    server2_addr.clone(),
+  );
   let server3 = Server::new(vec![server2_addr.clone()], server3_addr.clone());
 
   let h1 = tokio::spawn(async move { server1.start().await });
@@ -806,20 +861,22 @@ async fn test_forwarding_is_transitive_across_peers() {
     .await
     .unwrap();
 
-  tokio::time::sleep(Duration::from_millis(250)).await;
+  tokio::time::sleep(HEARTBEAT_PROPAGATION_WAIT).await;
 
   let (mut pub_w, _pub_r) = connect_client(&server1_addr).await.split();
   pub_w
     .send(tungstenite::Message::Binary(publish_bytes(
-      "mh",
-      b"one-hop",
+      "mh", b"one-hop",
     )))
     .await
     .unwrap();
 
   // Dummy on server2 should receive (server1 -> server2 forwarding works).
   let got_dummy = recv_publish(&mut dummy_r, Duration::from_secs(3)).await;
-  assert!(got_dummy.is_some(), "expected server2 local delivery via forwarding");
+  assert!(
+    got_dummy.is_some(),
+    "expected server2 local delivery via forwarding"
+  );
 
   // Server3 should NOT receive, because ServerForward messages are delivered locally only
   // and are not forwarded onward.

@@ -58,6 +58,23 @@ impl TopicsMap {
     };
   }
 
+  pub async fn get_all_unique_websocks(&self) -> Vec<Arc<Websock>> {
+    use std::collections::HashSet;
+    let topic_map = self.topic_map.read().await;
+    let mut unique = HashSet::new();
+    let mut result = Vec::new();
+    for subs_lock in topic_map.values() {
+      let subs = subs_lock.read().await;
+      for ws in subs.iter() {
+        // Only add Arc<Websock> if its ws_id is unique.
+        if unique.insert(ws.ws_id.clone()) {
+          result.push(ws.clone());
+        }
+      }
+    }
+    result
+  }
+
   pub async fn to_proto(&self, uuid: String) -> Bytes {
     build_proto_message(&ServerStateMessage {
       topics: self.get_all_topics().await,
@@ -165,6 +182,41 @@ impl TopicsMap {
   pub async fn contains_topic(&self, topic: &str) -> bool {
     let topic_map = self.topic_map.read().await;
     topic_map.contains_key(topic)
+  }
+
+  pub async fn update_topics_for_subscriber(&self, ws: Arc<Websock>, new_topics: Vec<String>) {
+    use std::collections::HashSet;
+
+    // 1. Collect all topics the provided `ws` is currently subscribed to.
+    let mut current_topics = Vec::new();
+    {
+      let topic_map = self.topic_map.read().await;
+      for (topic, subscribers) in topic_map.iter() {
+        if subscribers.read().await.iter().any(|w| w.as_ref().eq(&ws)) {
+          current_topics.push(topic.clone());
+        }
+      }
+    }
+
+    // 2. Prepare sets for efficient checking of adds/removes.
+    let new_topics_set: HashSet<String> = new_topics.iter().cloned().collect();
+    let current_topics_set: HashSet<String> = current_topics.iter().cloned().collect();
+
+    // 3. Remove ws from all topics it's not supposed to be in.
+    for topic in current_topics
+      .iter()
+      .filter(|t| !new_topics_set.contains(*t))
+    {
+      self.remove_subscriber_from_topic(topic, &ws).await;
+    }
+
+    // 4. Add ws to all new topics it isn't currently in.
+    for topic in new_topics
+      .iter()
+      .filter(|t| !current_topics_set.contains(*t))
+    {
+      self.push(topic.clone(), ws.clone()).await;
+    }
   }
 
   pub async fn remove_subscriber_from_topic(&self, topic: &str, ws: &Websock) {
@@ -359,6 +411,42 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn test_update_topics_for_subscriber_replaces_topic_membership() {
+    let map = TopicsMap::new();
+    let ws_target = create_mock_websocket().await;
+    let ws_other = create_mock_websocket().await;
+
+    map.push("old".to_string(), ws_target.clone()).await;
+    map.push("shared".to_string(), ws_target.clone()).await;
+    map.push("shared".to_string(), ws_other.clone()).await;
+
+    map
+      .update_topics_for_subscriber(
+        ws_target.clone(),
+        vec!["shared".to_string(), "new".to_string()],
+      )
+      .await;
+
+    let topic_map = map.topic_map.read().await;
+
+    assert!(
+      !topic_map.contains_key("old"),
+      "subscriber should be removed from dropped topics"
+    );
+
+    let shared = topic_map.get("shared").expect("shared topic missing");
+    let shared = shared.read().await;
+    assert_eq!(shared.len(), 2);
+    assert!(shared.iter().any(|ws| ws.as_ref().eq(&ws_target)));
+    assert!(shared.iter().any(|ws| ws.as_ref().eq(&ws_other)));
+
+    let new = topic_map.get("new").expect("new topic missing");
+    let new = new.read().await;
+    assert_eq!(new.len(), 1);
+    assert!(new.iter().any(|ws| ws.as_ref().eq(&ws_target)));
+  }
+
+  #[tokio::test]
   async fn test_send_to_topic_prunes_failed_subscriber_but_keeps_working_ones() {
     let map = TopicsMap::new();
     let (ws_ok, mut rx_ok) = create_mock_websocket_with_receiver().await;
@@ -424,7 +512,10 @@ mod tests {
     let map = TopicsMap::new();
     tokio::time::timeout(
       std::time::Duration::from_millis(200),
-      map.send_to_topic("does-not-exist", tungstenite::Message::Binary(vec![1].into())),
+      map.send_to_topic(
+        "does-not-exist",
+        tungstenite::Message::Binary(vec![1].into()),
+      ),
     )
     .await
     .expect("send_to_topic should return quickly for missing topic");
@@ -464,7 +555,8 @@ mod tests {
     assert_eq!(subs[0].ws_id.as_str(), ws_ok.ws_id.as_str());
 
     // And the slow receiver should not see anything.
-    let slow_res = tokio::time::timeout(std::time::Duration::from_millis(200), rx_slow.recv()).await;
+    let slow_res =
+      tokio::time::timeout(std::time::Duration::from_millis(200), rx_slow.recv()).await;
     assert!(slow_res.is_err());
   }
 }

@@ -1,6 +1,7 @@
 // TODO: Mac -> pi DOES NOT WORK ATM at all. Mac CAN find but the pi doesn't see mac's brodcast at all.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -15,10 +16,11 @@ use tokio_tungstenite::{
 use topics_map::{TopicsMap, WebSocketWrite};
 use uuid::Uuid;
 
+use crate::util::low_level::ExpectedTypedBytes;
 use crate::{
   message::{
-    AbstractMessage, MessageType, PublishMessage, ServerForwardMessage, ServerStateMessage,
-    TopicMessage, UnsubscribeMessage,
+    AbstractMessage, HeartbeatMessage, MessageType, PublishMessage, ServerForwardMessage,
+    ServerStateMessage, TopicMessage, UnsubscribeMessage,
   },
   server::{
     peers_map::PeersMap,
@@ -39,6 +41,15 @@ mod topics_map;
 mod util;
 
 const MAX_CONNECTION_ATTEMPTS: u32 = 5;
+const SLEEP_TIME: Duration = Duration::from_secs(1);
+
+pub trait ServerMessageHandler<T: Message + Default> {
+  fn handle(
+    self: Arc<Self>,
+    bytes: ExpectedTypedBytes<T>,
+    ws_write: Arc<Websock>,
+  ) -> impl std::future::Future<Output = Result<(), String>> + Send;
+}
 
 #[external_doc(path = "src/docs/server.md", key = "Server")]
 pub struct Server {
@@ -89,7 +100,35 @@ impl Server {
             .await;
         }
 
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let (websocks, peers) = tokio::join!(
+          self.topics_map.get_all_unique_websocks(),
+          self.peers_map.get_all_peers()
+        );
+        let ws_heartbeat_bytes = build_proto_message(&HeartbeatMessage {
+          message_type: MessageType::Heartbeat as i32,
+          uuid: Some(self.uuid.clone()),
+          topics: self.topics_map.get_all_topics().await,
+        });
+        let ws_tasks = websocks.into_iter().map(|websock| {
+          let msg = tungstenite::Message::Binary(ws_heartbeat_bytes.clone());
+          async move {
+            let mut ws_guard = websock.ws.write().await;
+            let _ = ws_guard.send(msg).await;
+          }
+        });
+        let peer_tasks = peers.into_iter().map(|peer| {
+          let heartbeat = ws_heartbeat_bytes.clone();
+          async move {
+            let _ = peer.write().await.send_raw(heartbeat).await;
+          }
+        });
+        futures_util::future::join(
+          futures_util::future::join_all(ws_tasks),
+          futures_util::future::join_all(peer_tasks),
+        )
+        .await;
+
+        tokio::time::sleep(SLEEP_TIME).await;
       }
     });
   }
@@ -187,34 +226,61 @@ impl Server {
     ws_write: Arc<Websock>,
   ) {
     debug!("Processing message of type: {:?}", message_type);
-    match message_type {
+
+    let result = match message_type {
+      MessageType::Publish => {
+        self
+          .clone()
+          .handle(ExpectedTypedBytes::<PublishMessage>::from(bytes), ws_write)
+          .await
+      }
+      MessageType::Subscribe => {
+        self
+          .clone()
+          .handle(ExpectedTypedBytes::<TopicMessage>::from(bytes), ws_write)
+          .await
+      }
+      MessageType::Heartbeat => {
+        self
+          .clone()
+          .handle(
+            ExpectedTypedBytes::<HeartbeatMessage>::from(bytes),
+            ws_write,
+          )
+          .await
+      }
+      MessageType::Unsubscribe => {
+        self
+          .clone()
+          .handle(
+            ExpectedTypedBytes::<UnsubscribeMessage>::from(bytes),
+            ws_write,
+          )
+          .await
+      }
       MessageType::ServerState => {
         self
           .clone()
-          .handle_server_state(
-            ServerStateMessage::decode(bytes).expect("Failed decoding MessageType::ServerState"),
+          .handle(
+            ExpectedTypedBytes::<ServerStateMessage>::from(bytes),
+            ws_write,
           )
           .await
       }
       MessageType::ServerForward => {
         self
           .clone()
-          .handle_server_forward(
-            ServerForwardMessage::decode(bytes)
-              .expect("Failed to decode MessageType::ServerForward"),
+          .handle(
+            ExpectedTypedBytes::<ServerForwardMessage>::from(bytes),
+            ws_write,
           )
           .await
       }
-      MessageType::Publish => {
-        self.clone().handle_publish(bytes).await;
-      }
-      MessageType::Subscribe => {
-        self.clone().handle_subscribe(bytes, ws_write).await;
-      }
-      MessageType::Unsubscribe => {
-        self.clone().handle_unsubscribe(bytes, ws_write).await;
-      }
-      MessageType::ServerStats => {}
+    };
+
+    if result.is_err() {
+      error!("Error handling message: {:?}", result.err());
+      return;
     }
   }
 }

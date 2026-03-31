@@ -1,3 +1,4 @@
+mod heartbeat;
 mod publish;
 mod server_forward;
 mod server_state;

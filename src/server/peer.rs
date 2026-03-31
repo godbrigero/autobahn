@@ -235,9 +235,7 @@ mod tests {
         uuid,
         topics,
       });
-      let _ = write
-        .send(tungstenite::Message::Binary(server_state))
-        .await;
+      let _ = write.send(tungstenite::Message::Binary(server_state)).await;
 
       while let Some(Ok(msg)) = read.next().await {
         let _ = tx.send(Bytes::from(msg.into_data()));
