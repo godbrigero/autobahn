@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use prost::Message;
 
 use crate::{
@@ -44,6 +44,8 @@ impl ServerMessageHandler<HeartbeatMessage> for Server {
           .topics_map
           .update_topics_for_subscriber(ws_write.clone(), heartbeat_message.topics)
           .await;
+
+        info!("Updated topics for subscriber: {}", ws_write.ws_id);
       }
 
       Ok(())

@@ -1,5 +1,6 @@
 // TODO: Mac -> pi DOES NOT WORK ATM at all. Mac CAN find but the pi doesn't see mac's brodcast at all.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,6 +11,7 @@ use no_incode_comments::external_doc;
 use peer::Peer;
 use prost::Message;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
 use tokio_tungstenite::{
   accept_async_with_config, tungstenite::protocol::WebSocketConfig, WebSocketStream,
 };
@@ -56,6 +58,7 @@ pub struct Server {
   address: Address,
   topics_map: Arc<TopicsMap>,
   peers_map: Arc<PeersMap>,
+  all_websockets: Arc<RwLock<HashSet<Arc<Websock>>>>,
   uuid: String,
 }
 
@@ -71,6 +74,7 @@ impl Server {
       address: self_addr,
       topics_map: Arc::new(TopicsMap::new()),
       peers_map: Arc::new(PeersMap::new_with_peers(peers)),
+      all_websockets: Arc::new(RwLock::new(HashSet::new())),
       uuid: Uuid::new_v4().to_string(),
     });
   }
@@ -100,33 +104,19 @@ impl Server {
             .await;
         }
 
-        let (websocks, peers) = tokio::join!(
-          self.topics_map.get_all_unique_websocks(),
-          self.peers_map.get_all_peers()
-        );
         let ws_heartbeat_bytes = build_proto_message(&HeartbeatMessage {
           message_type: MessageType::Heartbeat as i32,
           uuid: Some(self.uuid.clone()),
           topics: self.topics_map.get_all_topics().await,
         });
-        let ws_tasks = websocks.into_iter().map(|websock| {
-          let msg = tungstenite::Message::Binary(ws_heartbeat_bytes.clone());
-          async move {
-            let mut ws_guard = websock.ws.write().await;
-            let _ = ws_guard.send(msg).await;
-          }
-        });
-        let peer_tasks = peers.into_iter().map(|peer| {
-          let heartbeat = ws_heartbeat_bytes.clone();
-          async move {
-            let _ = peer.write().await.send_raw(heartbeat).await;
-          }
-        });
-        futures_util::future::join(
-          futures_util::future::join_all(ws_tasks),
-          futures_util::future::join_all(peer_tasks),
-        )
-        .await;
+        for ws in self.all_websockets.write().await.iter() {
+          let _ = ws
+            .ws
+            .write()
+            .await
+            .send(tungstenite::Message::Binary(ws_heartbeat_bytes.clone()))
+            .await;
+        }
 
         tokio::time::sleep(SLEEP_TIME).await;
       }
@@ -170,6 +160,7 @@ impl Server {
       .expect("Error handle_client, write.send()");
 
     let ws_write = Arc::new(Websock::new(write));
+    self.all_websockets.write().await.insert(ws_write.clone());
     while let Some(msg) = read.next().await {
       let message = match msg {
         Ok(tungstenite::Message::Close(_)) => {

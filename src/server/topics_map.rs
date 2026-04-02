@@ -21,6 +21,12 @@ pub struct Websock {
   pub ws_id: String,
 }
 
+impl std::hash::Hash for Websock {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    self.ws_id.hash(state);
+  }
+}
+
 impl Websock {
   pub fn new(ws: WebSocketWrite) -> Self {
     Self {
