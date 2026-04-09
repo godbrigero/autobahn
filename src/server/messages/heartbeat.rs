@@ -26,8 +26,8 @@ impl ServerMessageHandler<HeartbeatMessage> for Server {
         }
       };
 
-      if heartbeat_message.uuid.is_some() {
-        let uuid = heartbeat_message.uuid.unwrap();
+      if !heartbeat_message.uuid.is_empty() {
+        let uuid = heartbeat_message.uuid;
         let peer = self.peers_map.get_by_id(&uuid).await;
         if peer.is_none() {
           warn!("Peer not found, dropping heartbeat message. UUID: {}", uuid);
@@ -125,7 +125,7 @@ mod tests {
 
     let heartbeat = build_proto_message(&HeartbeatMessage {
       message_type: MessageType::Heartbeat as i32,
-      uuid: Some("peer-heartbeat".to_string()),
+      uuid: "peer-heartbeat".to_string(),
       topics: vec!["fresh".to_string()],
     });
 
@@ -148,7 +148,7 @@ mod tests {
 
     let heartbeat = build_proto_message(&HeartbeatMessage {
       message_type: MessageType::Heartbeat as i32,
-      uuid: None,
+      uuid: "".to_string(),
       topics: vec!["alpha".to_string(), "beta".to_string()],
     });
 
@@ -172,7 +172,7 @@ mod tests {
 
     let heartbeat = build_proto_message(&HeartbeatMessage {
       message_type: MessageType::Heartbeat as i32,
-      uuid: Some("missing".to_string()),
+      uuid: "missing".to_string(),
       topics: vec!["topic".to_string()],
     });
 

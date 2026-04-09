@@ -114,14 +114,15 @@ impl Discovery {
   pub async fn run_discovery_server_continuous(self: Arc<Self>) {
     info!("Starting continuous discovery server");
     let mut interval = interval(REBROADCAST_INTERVAL);
-    loop {
-      let info = self.create_service_info();
-      debug!("Re-registering discovery server");
+    let info = self.create_service_info();
 
-      match self.mdns.register(info) {
-        Ok(_) => debug!("Successfully re-registered mDNS service"),
-        Err(e) => warn!("Failed to re-register mDNS service: {}", e),
-      }
+    match self.mdns.register(info) {
+      Ok(_) => debug!("Successfully re-registered mDNS service"),
+      Err(e) => warn!("Failed to re-register mDNS service: {}", e),
+    }
+
+    loop {
+      debug!("Re-registering discovery server");
 
       interval.tick().await;
     }

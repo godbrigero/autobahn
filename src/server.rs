@@ -106,7 +106,7 @@ impl Server {
 
         let ws_heartbeat_bytes = build_proto_message(&HeartbeatMessage {
           message_type: MessageType::Heartbeat as i32,
-          uuid: Some(self.uuid.clone()),
+          uuid: self.uuid.clone(),
           topics: self.topics_map.get_all_topics().await,
         });
         for ws in self.all_websockets.write().await.iter() {

@@ -2,7 +2,10 @@ use autobahn::{
   discovery::Discovery,
   message::{HeartbeatMessage, MessageType, PublishMessage, TopicMessage, UnsubscribeMessage},
   server::Server,
-  util::{proto::{build_proto_message, get_message_type}, Address},
+  util::{
+    proto::{build_proto_message, get_message_type},
+    Address,
+  },
 };
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -56,7 +59,10 @@ async fn recv_publish(read: &mut WsRead, timeout: Duration) -> Option<PublishMes
         match get_message_type(&bytes) {
           MessageType::Publish => return PublishMessage::decode(bytes).ok(),
           MessageType::Heartbeat | MessageType::ServerState => continue,
-          other => panic!("unexpected binary message while waiting for publish: {:?}", other),
+          other => panic!(
+            "unexpected binary message while waiting for publish: {:?}",
+            other
+          ),
         }
       }
       tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => continue,
@@ -92,7 +98,7 @@ fn publish_bytes(topic: &str, payload: &[u8]) -> Bytes {
 fn heartbeat_bytes(topics: &[&str]) -> Bytes {
   build_proto_message(&HeartbeatMessage {
     message_type: MessageType::Heartbeat as i32,
-    uuid: None,
+    uuid: "".to_string(),
     topics: topics.iter().map(|topic| topic.to_string()).collect(),
   })
 }
