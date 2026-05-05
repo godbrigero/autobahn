@@ -46,6 +46,7 @@ pub struct Config {
   pub log_level: Option<LogLevel>,
   pub self_addr: Address,
   pub others: Option<Vec<Address>>,
+  pub autodiscovery_enabled: Option<bool>,
 }
 
 impl Config {
