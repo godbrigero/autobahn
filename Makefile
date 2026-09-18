@@ -55,3 +55,9 @@ coverage-html:
 		exit 1; \
 	}
 	cargo llvm-cov --workspace --html --ignore-filename-regex "src/main\\.rs$$"
+
+build-docker:
+	docker build -t autobahn .
+
+run-docker:
+	docker run -p 8080:8080 autobahn
